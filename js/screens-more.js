@@ -225,8 +225,8 @@ export function welcome(ctx) {
   const html = `<div class="content home" style="justify-content:center">
     <div class="col" style="gap:8px"><h1 class="h1">Сервизы</h1><span class="muted" style="line-height:1.45">Учёт клиентов, которые собирают сервиз по частям. Всё работает без интернета, данные хранятся только в этом телефоне.</span></div>
     <span class="label">С чего начать</span>
-    <button class="btn primary big" id="seed">Загрузить каталог на 03.11.2026</button>
-    <span class="xs muted" style="margin-top:-10px">1218 товаров и 355 комплектов уже встроены в приложение.</span>
+    <button class="btn primary big" id="seed">Загрузить каталог на 05.11.2026</button>
+    <span class="xs muted" style="margin-top:-10px">1977 товаров и 860 комплектов уже встроены в приложение.</span>
     <a class="btn" href="#/import">Загрузить свежий файл с сайта</a>
     <button class="btn" id="restore">Восстановить из резервной копии</button>
     <div id="msg"></div>
