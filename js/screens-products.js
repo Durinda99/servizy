@@ -51,17 +51,24 @@ export function home(ctx) {
 }
 
 // ================= Поиск товара =================
+const addIcon = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="9" cy="8" r="4"/><path d="M2 21a7 7 0 0 1 14 0M19 8v6M16 11h6"/></svg>';
+const SEC_SHORT = { 'Столовые предметы': 'Столовые', 'Чайно-кофейные предметы': 'Чайно-кофейные', 'Сервизы': 'Сервизы' };
+
 export function search(ctx, _p, query) {
-  const { m } = ctx;
-  const st = ctx.state.search ??= { q: '', multi: false, picked: [] };
+  const { m, db } = ctx;
+  const st = ctx.state.search ??= { q: '', multi: false, picked: [], sec: null };
   if (query.q !== undefined) st.q = query.q;
-  const html = `${top({ back: true, sub: `<div class="search grow" style="height:48px;border-radius:14px;box-shadow:none">${icon.search}<input id="q" type="search" enterkeyhint="search" autocomplete="off" placeholder="Артикул или название" value="${esc(st.q)}"></div>` })}
+  const secs = db.all('section').sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
+  const html = `<header class="top" style="flex-direction:column;align-items:stretch;gap:10px;padding:10px 16px 12px">
+      <div class="row" style="gap:8px"><button class="icon-btn" data-back aria-label="Назад">${icon.back}</button>
+        <label class="search grow" style="height:52px;border-radius:14px;box-shadow:none;padding:0 14px">${icon.search}<input id="q" type="search" enterkeyhint="search" autocomplete="off" placeholder="Артикул или название" value="${esc(st.q)}" style="font-weight:600"></label></div>
+      <div class="row" style="gap:8px;overflow-x:auto;scrollbar-width:none">${[{ id: null, name: 'Все' }, ...secs].map(s => `<button class="chip ${st.sec === s.id ? 'on' : ''}" style="height:36px;font-size:13px;white-space:nowrap;flex-shrink:0" data-sec="${s.id ?? ''}">${esc(SEC_SHORT[s.name] || s.name)}</button>`).join('')}</div>
+    </header>
     <div class="content" style="gap:10px">
-      <div class="between" style="align-items:center">
-        <button class="linkbtn" id="multi">${st.multi ? 'Готово, один товар' : 'Проверить несколько товаров'}</button>
-        <button class="linkbtn" id="newp">${icon.plus}Новый товар</button>
-      </div>
-      <div id="res" class="col" style="gap:8px"></div>
+      <span class="small b muted" id="found"></span>
+      <div id="res" class="col" style="gap:10px"></div>
+      <button class="btn" id="multi" style="border:1.5px dashed var(--blue);background:transparent;color:var(--blue);margin-top:6px">${st.multi ? 'Готово: проверять по одному' : `${icon.plus} Проверить несколько товаров (партию)`}</button>
+      <button class="linkbtn" id="newp" style="justify-content:center;font-weight:600">Нет в каталоге? Добавить товар вручную</button>
     </div>
     <div id="multibar" class="nav ${st.multi ? '' : 'hide'}" style="padding:10px 16px calc(12px + env(safe-area-inset-bottom))"><button class="btn primary big grow" id="showq"></button></div>`;
   return {
@@ -69,37 +76,49 @@ export function search(ctx, _p, query) {
     bind(root) {
       const inp = root.querySelector('#q');
       const res = root.querySelector('#res');
-      const bar = root.querySelector('#multibar');
       const showq = root.querySelector('#showq');
       const wi = m.waitingIndex();
       const bundles = m.bundleIds();
+      const line3 = p => {
+        const price = m.currentPrice(p.id);
+        let what;
+        if (bundles.has(p.id)) {
+          const leaves = m.leaves(p.id);
+          const n = leaves.reduce((s, l) => s + l.qty, 0);
+          what = 'Комплект: ' + (leaves.length <= 3 ? leaves.map(l => `${l.qty > 1 ? l.qty + ' ' : ''}${(m.kindName(l.product.kind_id) || m.short(l.product)).toLowerCase().split(' ')[0]}`).join(' + ') : `${n} ${plural(n, 'предмет', 'предмета', 'предметов')}`);
+        } else what = !p.sold_separately ? 'только в составе комплекта' : m.sectionNames(p.id).map(s => SEC_SHORT[s] || s).join(', ');
+        return [what, price != null ? rub(price) : null].filter(Boolean).join(' · ');
+      };
       const draw = () => {
-        const { total, items } = m.searchProducts(st.q, { limit: 50 });
+        const { total, items } = m.searchProducts(st.q, { limit: 50, sectionId: st.sec });
         showq.textContent = `Показать, кто ждёт (${st.picked.length})`;
         showq.disabled = !st.picked.length;
+        const fnd = root.querySelector('#found');
         if (!st.q.trim()) {
-          res.innerHTML = `<div class="empty">Введите артикул (например, 81.31631) или часть названия: «чашка саламандра».<br>Нажмите на товар — покажу, кто его ждёт.</div>`;
+          fnd.textContent = '';
+          res.innerHTML = `<div class="empty">Введите артикул (например, 81.31631) или часть названия: «чашка саламандра».<br>Нажмите на товар — покажу, кто его ждёт. Кнопка справа — записать клиента на товар.</div>`;
           return;
         }
+        fnd.textContent = `Найдено ${total} ${plural(total, 'товар', 'товара', 'товаров')}${total > items.length ? `, показаны первые ${items.length}` : ''}`;
         if (!items.length) { res.innerHTML = `<div class="empty">Ничего не нашлось.</div>`; return; }
         res.innerHTML = items.map(p => {
-          const n = wi.any ? wi.count(p.id) : 0;
+          const n = wi.count(p.id);
           const picked = st.picked.includes(p.id);
-          const isB = bundles.has(p.id);
-          return `<a class="card tight tap" style="flex-direction:row;align-items:center;gap:10px" href="#/queue/${p.id}" data-pid="${p.id}">
-            ${st.multi ? `<span class="check ${picked ? 'on' : ''}">${picked ? icon.check : ''}</span>` : ''}
-            <div class="col grow" style="gap:3px">
-              <span style="font-size:15px;font-weight:700;line-height:1.3">${esc(m.short(p))}</span>
-              <span class="xs b muted">${p.article ? 'арт. ' + esc(p.article) : 'без артикула'}${m.shapePattern(p) ? ' · ' + esc(m.shapePattern(p)) : ''}</span>
-              <div class="row" style="gap:6px">${isB ? '<span class="tag violet">комплект</span>' : ''}${!p.sold_separately ? '<span class="tag violet">только в составе</span>' : ''}</div>
-            </div>
-            ${n ? `<span class="tag blue" style="align-self:center;font-size:13px">ждут ${n}</span>` : ''}
-          </a>`;
-        }).join('') + (total > items.length ? `<div class="empty">Показаны первые ${items.length} из ${total}. Уточните запрос.</div>` : '');
+          const sp = m.shapeName(p.shape_id);
+          return `<div class="card" style="flex-direction:row;padding:0;gap:0;overflow:hidden;align-items:stretch">
+            <a class="row grow tap" style="gap:12px;padding:12px 10px 12px 14px;color:var(--ink);min-width:0" href="#/queue/${p.id}" data-pid="${p.id}">
+              ${st.multi ? `<span class="check ${picked ? 'on' : ''}">${picked ? icon.check : ''}</span>` : ''}
+              <div class="col grow" style="gap:3px"><span style="font-size:15px;font-weight:700;line-height:1.3">${esc(m.short(p))}${sp ? ', ' + esc(sp) : ''}</span><span class="xs b muted">${p.article ? 'арт. ' + esc(p.article) : 'без артикула'}${m.patternName(p.pattern_id) ? ' · ' + esc(m.patternName(p.pattern_id)) : ''}</span><span class="small muted">${esc(line3(p))}</span></div>
+              ${n ? `<span class="col" style="align-items:center;padding:6px 10px;border-radius:12px;flex-shrink:0;gap:0;${n > 1 ? 'background:var(--blue);color:#fff' : 'background:var(--blue-soft);color:var(--blue)'}"><span style="font-size:18px;font-weight:800;line-height:1.1">${n}</span><span style="font-size:11px;font-weight:600">${plural(n, 'ждёт', 'ждут', 'ждут')}</span></span>` : '<span class="xs b muted" style="flex-shrink:0;text-align:right">никто<br>не ждёт</span>'}
+            </a>
+            ${p.is_packaging ? '' : `<a href="#/add/${p.id}" aria-label="Записать клиента на этот товар" style="width:52px;display:flex;align-items:center;justify-content:center;border-left:1px solid var(--line);color:var(--blue);flex-shrink:0">${addIcon}</a>`}
+          </div>`;
+        }).join('');
       };
       let t;
       inp.addEventListener('input', () => { clearTimeout(t); t = setTimeout(() => { st.q = inp.value; draw(); }, 150); });
       inp.addEventListener('keydown', e => { if (e.key === 'Enter') inp.blur(); });
+      root.querySelectorAll('[data-sec]').forEach(b => b.onclick = () => { st.sec = b.dataset.sec ? Number(b.dataset.sec) : null; root.querySelectorAll('[data-sec]').forEach(x => x.classList.toggle('on', x === b)); draw(); });
       res.addEventListener('click', e => {
         const a = e.target.closest('[data-pid]');
         if (!a || !st.multi) return;
@@ -108,7 +127,7 @@ export function search(ctx, _p, query) {
         st.picked = st.picked.includes(id) ? st.picked.filter(x => x !== id) : [...st.picked, id];
         draw();
       });
-      root.querySelector('#multi').onclick = () => { st.multi = !st.multi; if (!st.multi) st.picked = []; bar.classList.toggle('hide', !st.multi); root.querySelector('#multi').textContent = st.multi ? 'Готово, один товар' : 'Проверить несколько товаров'; draw(); };
+      root.querySelector('#multi').onclick = () => { st.multi = !st.multi; if (!st.multi) st.picked = []; ctx.refresh(); };
       showq.onclick = () => ctx.go('#/queue/' + st.picked.join(','));
       root.querySelector('#newp').onclick = () => productEditSheet(ctx, null);
       draw();
@@ -132,7 +151,7 @@ function groupCard(ctx, g, idx, shown = idx) {
     <a class="row" style="gap:8px;color:var(--ink)" href="#/client/${g.client.id}"><span class="num">${shown + 1}</span><span style="font-size:16px;font-weight:700">${esc(g.client.name)}</span></a>
     <div class="small muted" style="line-height:1.35">
       ${sim.length && sim.length === g.items.length ? `<span class="b" style="color:var(--violet)">Что-то подобное:</span> ${esc(m.itemLabel(sim[0].ri).toLowerCase())}<br>` : ''}
-      <a href="#/request/${g.request.id}" style="color:var(--muted)">${esc(g.bundle ? m.short(g.bundle) + (g.bundle.pattern_id ? ' «' + m.patternName(g.bundle.pattern_id) + '»' : '') : 'запрос')}</a> · запись от ${fmtDate(g.since)}
+      <a href="#/request/${g.request.id}" style="color:var(--muted)">${esc(g.bundle ? m.short(g.bundle) + (g.bundle.pattern_id ? ' «' + m.patternName(g.bundle.pattern_id) + '»' : '') : m.requestTitle(g.request))}</a> · запись от ${fmtDate(g.since)}
     </div>
     <div class="inset">${g.items.map(it => `<div class="between" style="font-size:14px;align-items:flex-start"><span class="col" style="gap:1px"><span class="b">${esc(it.similar ? m.kindName(it.ri.kind_id) : m.short(it.leaf.product))}${it.bought ? ` <span class="muted" style="font-weight:500">${it.bought} из ${it.ri.qty_needed} куплены</span>` : ''}</span><span class="xs muted">${esc(priceLine(m, it))}</span></span><span class="qty">${it.remaining} шт</span></div>`).join('')}</div>
     <div class="grid3">${phoneBtns(g.client)}<button class="btn" style="height:44px;border-radius:12px;font-size:14px" data-mark="${idx}">Отметить</button></div>
@@ -180,45 +199,56 @@ export function queue(ctx, [ids]) {
   };
 }
 
-/** «После разговора»: купила / пусть ждёт / не нужно + заметка + напоминание */
+/** «После разговора»: купил / пусть ждёт / снять с ожидания + заметка + напоминание */
+const REASONS = ['Купил в другом месте', 'Передумал', 'Уже есть'];
 function afterCallSheet(ctx, g) {
   const { m } = ctx;
   const arrival = m.product(g.arrival);
   const multi = g.items.length > 1;
   const unitMax = Math.max(...g.items.map(it => Math.ceil(it.remaining / it.leaf.qty)));
-  const waits = g.items.map(it => `${esc((it.similar ? m.kindName(it.ri.kind_id) : m.short(it.leaf.product)).toLowerCase())} — ${it.remaining} шт`).join(', ');
-  const html = `<div class="col"><h1 class="h-screen">${esc(g.client.name)}</h1><span class="small muted" style="line-height:1.4">Пришёл товар «${esc(m.short(arrival))}»${arrival.article ? ' · ' + esc(arrival.article) : ''}<br>Ждёт: ${waits}${g.bundle ? `<br>для «${esc(m.short(g.bundle))}»` : ''}</span></div>
+  const nm = it => (it.similar ? m.kindName(it.ri.kind_id) : m.short(it.leaf.product));
+  const waits = g.items.map(it => `${esc(nm(it).toLowerCase())} — ${it.remaining} шт`).join(', ');
+  const html = `<div class="col"><h1 class="h-screen">${esc(g.client.name)}</h1><span class="small muted" style="line-height:1.4">Пришёл товар «${esc(m.short(arrival))}»${arrival.article ? ' · ' + esc(arrival.article) : ''}<br>Ждёт: ${waits}<br>для «${esc(g.bundle ? m.short(g.bundle) : m.requestTitle(g.request))}»</span></div>
     <div class="col" style="gap:8px"><span class="fl">Чем закончился разговор</span>
-      <div class="grid3"><button class="btn on" data-out="buy">Купил(а)</button><button class="btn" data-out="wait">Пусть ждёт</button><button class="btn" data-out="no">Не нужно</button></div></div>
+      <div class="grid3"><button class="btn on" data-out="buy">Купил</button><button class="btn" data-out="wait">Пусть ждёт</button><button class="btn" data-out="no" style="font-size:13px;line-height:1.15">Снять с<br>ожидания</button></div></div>
     <div id="buybox" class="col" style="gap:6px">
-      <div class="between" style="align-items:center;padding:12px 14px;background:var(--bg);border-radius:14px"><span style="font-size:15px;font-weight:600;line-height:1.3">Сколько купил(а)<br><span class="small muted" style="font-weight:500">${multi ? 'комплектов «' + esc(m.short(arrival)) + '»' : 'штук'}</span></span>${stepperHTML('n', Math.min(1, unitMax), 1, unitMax)}</div>
+      <div class="between" style="align-items:center;padding:12px 14px;background:var(--bg);border-radius:14px"><span style="font-size:15px;font-weight:600;line-height:1.3">Сколько купил<br><span class="small muted" style="font-weight:500">${multi ? 'комплектов «' + esc(m.short(arrival)) + '»' : 'штук'}</span></span>${stepperHTML('n', Math.min(1, unitMax), 1, unitMax)}</div>
       <span class="small muted" id="buyinfo"></span>
     </div>
+    <div id="nobox" class="col hide" style="gap:8px"><span class="fl">Причина</span><div class="row wrap" style="gap:8px">${[...REASONS, 'Другое…'].map((x, i) => `<button type="button" class="chip ${i === 0 ? 'on' : ''}" data-reason="${esc(x)}">${esc(x)}</button>`).join('')}</div></div>
+    <div class="col" style="gap:4px">${g.items.map(it => `<button class="linkbtn small" style="min-height:32px" data-edit="${it.ri.id}">Неверное количество в заказе${multi ? ` (${esc(nm(it).toLowerCase())})` : ''}? Изменить</button>`).join('')}</div>
     <label class="field"><span class="fl">Заметка</span><textarea id="note" rows="2" placeholder="Например: остальное возьмёт после зарплаты"></textarea></label>
     ${reminderPicker()}
     <button class="btn primary big" id="save">Сохранить</button>`;
   sheet(html, (el, close) => {
-    let out = 'buy';
+    let out = 'buy', reason = REASONS[0];
     const info = el.querySelector('#buyinfo');
     const upd = () => {
       const n = stepVal(el, 'n');
-      info.innerHTML = (multi ? 'Покупка запишется во все позиции запроса:<br>' : '') + `<span class="b" style="color:var(--ink)">${g.items.map(it => `${esc(it.similar ? m.kindName(it.ri.kind_id) : m.short(it.leaf.product))} — останется ${Math.max(0, it.remaining - n * it.leaf.qty)}`).join(' · ')}</span>`;
+      info.innerHTML = (multi ? 'Покупка запишется во все позиции запроса:<br>' : '') + `<span class="b" style="color:var(--ink)">${g.items.map(it => `${esc(nm(it))} — останется ${Math.max(0, it.remaining - n * it.leaf.qty)}`).join(' · ')}</span>`;
     };
     bindSteppers(el, upd); upd();
     el.querySelectorAll('[data-out]').forEach(b => b.onclick = () => {
       out = b.dataset.out;
       el.querySelectorAll('[data-out]').forEach(x => x.classList.toggle('on', x === b));
       el.querySelector('#buybox').classList.toggle('hide', out !== 'buy');
+      el.querySelector('#nobox').classList.toggle('hide', out !== 'no');
     });
+    el.querySelectorAll('[data-reason]').forEach(b => b.onclick = () => { reason = b.dataset.reason; el.querySelectorAll('[data-reason]').forEach(x => x.classList.toggle('on', x === b)); });
+    el.querySelectorAll('[data-edit]').forEach(b => b.onclick = async () => { close(); const { editItemSheet } = await import('./screens-clients.js'); editItemSheet(ctx, Number(b.dataset.edit)); });
     el.querySelector('#save').onclick = async () => {
       const note = el.querySelector('#note').value.trim();
       const n = stepVal(el, 'n');
       if (out === 'buy') for (const it of g.items) m.buy(it.ri.id, Math.min(it.remaining, n * it.leaf.qty), multi || arrival.id !== it.leaf.product.id ? `как «${m.short(arrival)}» ${arrival.article ?? ''}`.trim() : null);
-      if (out === 'no') for (const it of g.items) m.notNeeded(it.ri.id, note || 'не нужно');
+      if (out === 'no') {
+        if (reason === 'Другое…' && !note) { toast('Напишите причину в заметке'); return; }
+        const text = reason === 'Другое…' ? note : note ? `${reason.toLowerCase()}: ${note}` : reason.toLowerCase();
+        for (const it of g.items) m.withdraw(it.ri.id, text);
+      }
       if (note && out !== 'no') m.appendNote('request', g.request.id, note);
       const when = readReminderPicker(el);
       if (when) m.addReminder({ client_id: g.client.id, request_id: g.request.id, remind_at: when, note: note || `Перезвонить: ${m.short(arrival)}` });
-      await ctx.save(out === 'buy' ? 'Покупка записана' : 'Сохранено');
+      await ctx.save(out === 'buy' ? 'Покупка записана' : out === 'no' ? 'Снято с ожидания' : 'Сохранено');
       close();
       ctx.refresh();
     };
@@ -237,7 +267,7 @@ export function product(ctx, [id]) {
   const curRec = prices.find(x => x.price_kop === cur && x.valid_from <= todayISO());
   const sections = db.all('product_section').filter(s => s.product_id === p.id).map(s => m.dictName('section', s.section_id)).join(', ');
   const inB = m.bundlesContaining(p.id);
-  const waiting = m.queue([p.id]).length;
+  const waiting = new Set(m.queue([p.id]).map(g => g.client.id)).size;
   const kv = [['Раздел', sections], ['Вид', m.kindName(p.kind_id)], ['Форма', m.shapeName(p.shape_id)], ['Рисунок', m.patternName(p.pattern_id)], ['Коллекция', m.dictName('collection', p.collection_id)], ['Материал', p.material],
     ['Персон', isB ? p.persons : null], ['Предметов', isB ? p.items_count : null], ['Высота', p.height_mm ? p.height_mm + ' мм' : null], ['Диаметр / длина', p.length_mm ? p.length_mm + ' мм' : null], ['Ширина', p.width_mm ? p.width_mm + ' мм' : null], ['Объём', p.volume_ml ? p.volume_ml + ' мл' : null], ['Вес', p.weight_g ? p.weight_g + ' г' : null], ['Год выпуска', p.year_start]]
     .filter(([, v]) => v);
@@ -253,14 +283,15 @@ export function product(ctx, [id]) {
       </div>
     </div>
     ${kv.length || p.url ? `<div class="card" style="gap:10px"><div class="kv">${kv.map(([k, v]) => `<div class="col" style="gap:2px"><span class="k">${k}</span><span class="v">${esc(v)}</span></div>`).join('')}</div>${p.url ? `<a href="${esc(p.url)}" target="_blank" rel="noopener" class="small b">Открыть на сайте ↗</a>` : ''}</div>` : ''}
-    ${p.is_packaging ? '' : `<a class="btn primary big" href="#/queue/${p.id}" style="justify-content:space-between">Кто ждёт этот товар<span class="count">${waiting}</span></a>`}
+    ${p.is_packaging ? '' : `<a class="btn primary big" href="#/queue/${p.id}" style="justify-content:space-between">Кто ждёт этот товар<span class="count">${waiting}</span></a>
+      <a class="btn soft" href="#/add/${p.id}">${addIcon} Записать клиента на этот товар</a>`}
     <div class="card" style="gap:10px">
       <div class="between" style="align-items:flex-end"><div class="col" style="gap:2px"><span class="xs b muted">ЦЕНА СЕЙЧАС · справочно</span><span style="font-size:24px;font-weight:800">${cur != null ? rub(cur) : 'нет'}</span>${curRec ? `<span class="xs muted">с ${fmtDate(curRec.valid_from)}</span>` : `<span class="xs muted">${p.sold_separately ? 'цена не внесена' : 'продаётся только в составе комплекта'}</span>`}</div><button class="btn sm soft" id="price">+ Новая цена</button></div>
       ${prices.length > 1 ? `<div class="col" style="gap:4px">${prices.map(x => `<div class="between small"><span class="muted">с ${fmtDate(x.valid_from)}${x.valid_from > todayISO() ? ' (будущая)' : ''}</span><span class="b">${rub(x.price_kop)}</span></div>`).join('')}</div>` : prices.length ? '<span class="xs muted">История: пока одна цена.</span>' : ''}
     </div>
     ${isB ? `<div class="between"><span class="label">Состоит из</span><button class="linkbtn small" id="comp">Изменить состав</button></div>
       <div class="list">${items.map(i => `<a class="li" href="#/product/${i.product.id}"><span class="col" style="gap:1px"><span style="font-size:14px;${i.product.is_packaging ? 'color:var(--muted)' : ''}">${esc(m.short(i.product))}</span><span class="xs muted">${i.product.article ? esc(i.product.article) : 'без артикула'}${i.product.is_packaging ? ' · упаковка' : ''}</span></span><span class="b nowrap">× ${i.quantity}</span></a>`).join('')}</div>
-      <button class="btn soft" id="enroll">Записать клиента на этот комплект</button>` : ''}
+      <button class="btn soft" id="enroll">Клиент собирает весь комплект</button>` : ''}
     ${inB.length ? `<span class="label">Входит в комплекты</span><div class="list">${inB.map(b => `<a class="li" href="#/product/${b.bundle.id}"><span style="font-size:14px">${esc(b.bundle.name)}</span><span class="b nowrap">× ${b.quantity}</span></a>`).join('')}</div>` : ''}
     ${!isB && !p.is_packaging ? `<button class="btn soft" id="addcomp">Сделать комплектом (задать состав)</button>` : ''}
   </div>`;

@@ -1,11 +1,11 @@
 // Работа без интернета: все файлы приложения кладутся в кэш при установке.
 // При выпуске новой версии меняйте VERSION — телефон подхватит обновление при следующем выходе в сеть.
-const VERSION = 'servizy-1.1.0';
+const VERSION = 'servizy-1.2.0';
 const FILES = [
   './', './index.html', './manifest.webmanifest', './css/app.css',
   './js/app.js', './js/db.js', './js/model.js', './js/ui.js', './js/util.js', './js/xlsx.js', './js/importer.js',
   './js/screens-products.js', './js/screens-clients.js', './js/screens-more.js',
-  './data/seed.json', './data/kindmap.json',
+  './data/catalog.json', './data/kindmap.json',
   './icons/icon-192.png', './icons/icon-512.png', './icons/apple-touch-icon.png',
 ];
 

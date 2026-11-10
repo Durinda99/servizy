@@ -6,7 +6,7 @@ import * as P from './screens-products.js';
 import * as C from './screens-clients.js';
 import * as M from './screens-more.js';
 
-export const APP_VERSION = '1.0.0';
+export const APP_VERSION = '1.2.0';
 
 const routes = [
   [/^\/$/, P.home],
@@ -18,6 +18,7 @@ const routes = [
   [/^\/client\/(\d+)$/, C.client],
   [/^\/client\/(\d+)\/new(?:\/(\d+))?$/, C.newRequest],
   [/^\/request\/(\d+)$/, C.request],
+  [/^\/add\/(\d+)$/, C.addToList],
   [/^\/more$/, M.more],
   [/^\/import$/, M.importScreen],
   [/^\/dict\/(\w+)$/, M.dict],

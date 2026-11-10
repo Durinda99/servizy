@@ -2,7 +2,18 @@
 import { esc, rub, fmtDate, plural, todayISO, nowISO, daysAgo, normKey } from './util.js';
 import { icon, top, nav, sheet, toast, confirmSheet, download, pickFile } from './ui.js';
 import { readXlsx, writeXlsx } from './xlsx.js';
-import { importCatalog } from './importer.js';
+import { importCatalog, catalogToWorkbook } from './importer.js';
+
+/** Встроенный каталог (data/catalog.json) */
+export const BUILTIN = { date: '2026-11-05', products: 1977, bundles: 860 };
+
+async function loadBuiltin(ctx) {
+  const [cat, kindmap] = await Promise.all([fetch('data/catalog.json').then(r => { if (!r.ok) throw new Error('файл каталога не найден'); return r.json(); }), fetch('data/kindmap.json').then(r => r.json()).catch(() => ({}))]);
+  if (!ctx.db.count('section')) for (const [i, n] of ['Столовые предметы', 'Чайно-кофейные предметы', 'Сервизы'].entries()) ctx.db.put('section', { name: n, sort_order: i + 1 });
+  const snapshot = ctx.db.dump();
+  try { return importCatalog(ctx.db, catalogToWorkbook(cat), { fileDate: cat.fileDate, kindmap }); }
+  catch (e) { ctx.db.loadDump(snapshot, { track: false }); throw e; }
+}
 
 const DICTS = { section: 'Разделы', product_kind: 'Виды изделий', shape: 'Формы', pattern: 'Рисунки', collection: 'Коллекции' };
 
@@ -46,13 +57,13 @@ export async function restoreBackup(ctx) {
 async function exportExcel(ctx) {
   const { db, m } = ctx;
   const cName = id => db.get('client', id)?.name ?? '';
-  const st = { active: 'активный', closed: 'закрыт', waiting: 'ждёт', bought: 'куплено', not_needed: 'не нужно', done: 'выполнено' };
+  const st = { active: 'ждёт', closed: 'всё куплено', withdrawn: 'снят с ожидания', waiting: 'ждёт', bought: 'куплено', done: 'выполнено', bundle: 'комплект', loose: 'отдельные товары' };
   const kop = v => v == null ? null : v / 100;
   const reqs = db.all('request');
   const sheets = [
     { name: 'Клиенты', rows: [['Имя', 'Телефон', 'Заметки', 'В архиве', 'Создан'], ...db.all('client').map(c => [c.name, c.phone, c.note, c.is_archived ? 'да' : '', c.created_at])] },
-    { name: 'Запросы', rows: [['Клиент', 'Комплект', 'Артикул', 'Статус', 'Создан', 'Закрыт', 'Нужно', 'Собрано', 'Ждёт', 'Заметка'], ...reqs.map(r => { const b = m.product(r.bundle_id); const p = m.requestProgress(r.id); return [cName(r.client_id), b?.name, b?.article, st[r.status], r.created_at, r.closed_at, p.need, p.got, p.waiting, r.note]; })] },
-    { name: 'Позиции', rows: [['Клиент', 'Комплект', 'Позиция', 'Артикул', 'Нужно', 'Куплено', 'Остаток', 'Статус', 'Цена при записи, ₽', 'Цена сейчас, ₽', 'Дата записи', 'Заметка'], ...db.all('request_item').map(ri => { const r = db.get('request', ri.request_id); const p = ri.product_id ? m.product(ri.product_id) : null; const bought = m.bought(ri.id); return [cName(r?.client_id), m.product(r?.bundle_id)?.name, m.itemLabel(ri), p?.article, ri.qty_needed, bought, Math.max(0, ri.qty_needed - bought), st[ri.status], kop(ri.price_kop), p ? kop(m.currentPrice(p.id)) : null, ri.created_at, ri.note]; })] },
+    { name: 'Запросы', rows: [['Клиент', 'Что собирает', 'Артикул', 'Статус', 'Причина снятия', 'Создан', 'Закрыт', 'Нужно', 'Собрано', 'Ждёт', 'Заметка'], ...reqs.map(r => { const b = r.bundle_id ? m.product(r.bundle_id) : null; const p = m.requestProgress(r.id); return [cName(r.client_id), b?.name ?? 'Отдельные товары', b?.article, st[r.status], r.withdraw_reason, r.created_at, r.closed_at, p.need, p.got, p.waiting, r.note]; })] },
+    { name: 'Позиции', rows: [['Клиент', 'Что собирает', 'Позиция', 'Артикул', 'Нужно', 'Куплено', 'Остаток', 'Статус', 'Причина снятия', 'Цена при записи, ₽', 'Цена сейчас, ₽', 'Дата записи', 'Изменено', 'Заметка'], ...db.all('request_item').map(ri => { const r = db.get('request', ri.request_id); const p = ri.product_id ? m.product(ri.product_id) : null; const bought = m.bought(ri.id); return [cName(r?.client_id), r ? m.requestTitle(r) : '', m.itemLabel(ri), p?.article, ri.qty_needed, bought, ri.status === 'waiting' ? Math.max(0, ri.qty_needed - bought) : 0, st[ri.status], ri.withdraw_reason, kop(ri.price_kop), p ? kop(m.currentPrice(p.id)) : null, ri.created_at, ri.updated_at, ri.note]; })] },
     { name: 'Покупки', rows: [['Дата', 'Клиент', 'Позиция', 'Кол-во', 'Заметка'], ...db.all('purchase').map(pu => { const ri = db.get('request_item', pu.request_item_id); const r = ri && db.get('request', ri.request_id); return [pu.purchased_at, cName(r?.client_id), ri ? m.itemLabel(ri) : '', pu.qty, pu.note]; })] },
     { name: 'Напоминания', rows: [['Когда', 'Клиент', 'Заметка', 'Статус', 'Выполнено'], ...db.all('reminder').map(r => [r.remind_at, cName(r.client_id), r.note, st[r.status], r.done_at])] },
     { name: 'Цены', rows: [['Артикул', 'Название', 'Цена, ₽', 'Действует с'], ...db.all('product_price').map(pr => { const p = m.product(pr.product_id); return [p?.article, p?.name, kop(pr.price_kop), pr.valid_from]; })] },
@@ -74,7 +85,8 @@ export function more(ctx) {
     <h1 class="h1">Ещё</h1>
     <div class="col" style="gap:6px"><span class="label">Каталог с сайта</span>
       <div class="card tight" style="gap:10px"><span style="font-size:14px;line-height:1.4">${imp ? `Последняя загрузка: <span class="b">${fmtDate(imp.at)}</span><br><span class="muted">${imp.products} товаров · ${imp.bundles} комплектов</span>` : 'Каталог ещё не загружался'}</span>
-      <a class="btn primary" href="#/import">${icon.upload} Загрузить файл с сайта (Excel)</a></div></div>
+      <a class="btn primary" href="#/import">${icon.upload} Загрузить файл с сайта (Excel)</a>
+      ${!imp || imp.at < BUILTIN.date ? `<button class="btn soft" id="builtin">Обновить до встроенного каталога от ${fmtDate(BUILTIN.date)}</button><span class="xs muted">${BUILTIN.products} товаров, ${BUILTIN.bundles} комплектов. Клиенты и запросы не изменятся.</span>` : ''}</div></div>
     <div class="col" style="gap:6px"><span class="label">Резервная копия</span>
       <div class="card tight" style="gap:10px"><span style="font-size:14px">${last ? `Последняя: ${fmtDate(last.slice(0, 10))} — ${ago === 0 ? 'сегодня' : `${ago} ${plural(ago, 'день', 'дня', 'дней')} назад`}` : 'Копий ещё не было'}</span>
         <div class="grid2"><button class="btn soft" id="bk">В «Загрузки»</button><button class="btn soft" id="sh">Поделиться</button></div>
@@ -83,7 +95,7 @@ export function more(ctx) {
     <div class="col" style="gap:6px"><span class="label">Справочники (оператор)</span>
       <div class="list">${li('#/search', 'Цены товаров', db.count('product_price'))}${Object.entries(DICTS).map(([s, l]) => li('#/dict/' + s, l, db.count(s))).join('')}</div></div>
     <div class="col" style="gap:6px"><span class="label">Архив</span>
-      <div class="list">${li('#/archive/requests', 'Закрытые запросы', closedReq)}${li('#/archive/clients', 'Клиенты в архиве', archClients)}</div></div>
+      <div class="list">${li('#/archive/requests', 'Закрытые и снятые запросы', closedReq)}${li('#/archive/clients', 'Клиенты в архиве', archClients)}</div></div>
     <span class="xs muted" style="text-align:center">Сервизы ${ctx.version} · данные хранятся только в этом телефоне<span id="pers"></span></span>
   </div>${nav('more')}`;
   return {
@@ -93,6 +105,12 @@ export function more(ctx) {
       root.querySelector('#sh').onclick = () => backupShare(ctx).then(() => ctx.refresh());
       root.querySelector('#rs').onclick = () => restoreBackup(ctx);
       root.querySelector('#xl').onclick = () => exportExcel(ctx);
+      root.querySelector('#builtin')?.addEventListener('click', async e => {
+        e.target.disabled = true; e.target.textContent = 'Обновляю…';
+        try { const r = await loadBuiltin(ctx); await ctx.save(`Каталог обновлён: +${r.added} товаров`); }
+        catch (err) { toast('Не удалось: ' + (err.message || err), 5000); }
+        ctx.refresh();
+      });
       navigator.storage?.persisted?.().then(p => { if (!p) root.querySelector('#pers').textContent = ' · установите приложение на главный экран, чтобы браузер не очистил данные'; });
     },
   };
@@ -212,12 +230,12 @@ export function archive(ctx, [kind]) {
   let body;
   if (kind === 'requests') {
     const list = db.all('request').filter(r => r.status !== 'active').sort((a, b) => (b.closed_at || '').localeCompare(a.closed_at || ''));
-    body = list.map(r => { const p = m.requestProgress(r.id); return `<a class="card tight tap" href="#/request/${r.id}"><span class="b">${esc(db.get('client', r.client_id)?.name ?? '')}</span><span class="small">${esc(m.short(m.product(r.bundle_id)))} · ${esc(m.shapePattern(m.product(r.bundle_id) || {}))}</span><span class="xs muted">с ${fmtDate(r.created_at)} по ${fmtDate(r.closed_at)} · собрано ${p.got} из ${p.need}</span></a>`; }).join('') || '<div class="empty">Закрытых запросов нет</div>';
+    body = list.map(r => { const p = m.requestProgress(r.id); return `<a class="card tight tap" href="#/request/${r.id}"><span class="b">${esc(db.get('client', r.client_id)?.name ?? '')}</span><span class="small">${esc(m.requestTitle(r))} · ${esc(m.requestSub(r))}</span><span class="xs muted">${r.status === 'closed' ? 'всё куплено' : 'снят с ожидания' + (r.withdraw_reason ? ': ' + esc(r.withdraw_reason) : '')} · с ${fmtDate(r.created_at)} по ${fmtDate(r.closed_at)} · собрано ${p.got}</span></a>`; }).join('') || '<div class="empty">Закрытых и снятых запросов нет</div>';
   } else {
     const list = db.all('client').filter(c => c.is_archived).sort((a, b) => a.name.localeCompare(b.name, 'ru'));
     body = list.map(c => `<a class="card tight tap" href="#/client/${c.id}"><span class="b">${esc(c.name)}</span><span class="small muted">${esc(c.phone ?? '')}</span></a>`).join('') || '<div class="empty">В архиве никого нет</div>';
   }
-  return { html: `${top({ title: kind === 'requests' ? 'Закрытые запросы' : 'Клиенты в архиве' })}<div class="content" style="gap:8px">${body}</div>`, backTo: '#/more' };
+  return { html: `${top({ title: kind === 'requests' ? 'Архив запросов' : 'Клиенты в архиве' })}<div class="content" style="gap:8px">${body}</div>`, backTo: '#/more' };
 }
 
 // ================= Первый запуск =================
@@ -225,8 +243,8 @@ export function welcome(ctx) {
   const html = `<div class="content home" style="justify-content:center">
     <div class="col" style="gap:8px"><h1 class="h1">Сервизы</h1><span class="muted" style="line-height:1.45">Учёт клиентов, которые собирают сервиз по частям. Всё работает без интернета, данные хранятся только в этом телефоне.</span></div>
     <span class="label">С чего начать</span>
-    <button class="btn primary big" id="seed">Загрузить каталог на 05.11.2026</button>
-    <span class="xs muted" style="margin-top:-10px">1977 товаров и 860 комплектов уже встроены в приложение.</span>
+    <button class="btn primary big" id="seed">Загрузить каталог на ${fmtDate(BUILTIN.date)}</button>
+    <span class="xs muted" style="margin-top:-10px">${BUILTIN.products} товаров и ${BUILTIN.bundles} комплектов уже встроены в приложение.</span>
     <a class="btn" href="#/import">Загрузить свежий файл с сайта</a>
     <button class="btn" id="restore">Восстановить из резервной копии</button>
     <div id="msg"></div>
@@ -236,11 +254,10 @@ export function welcome(ctx) {
     bind(root) {
       root.querySelector('#seed').onclick = async e => {
         e.target.disabled = true;
-        root.querySelector('#msg').innerHTML = '<div class="spinner"></div>';
+        root.querySelector('#msg').innerHTML = '<div class="empty"><div class="spinner"></div><br>Загружаю каталог…</div>';
+        await new Promise(r => setTimeout(r, 30));
         try {
-          const d = await fetch('data/seed.json').then(r => { if (!r.ok) throw new Error('файл каталога не найден'); return r.json(); });
-          d.stores.settings = (d.stores.settings || []).filter(s => s.key !== 'last_backup_at');
-          ctx.db.loadDump(d);
+          await loadBuiltin(ctx);
           await ctx.save('Каталог загружен');
           ctx.go('#/');
         } catch (err) {

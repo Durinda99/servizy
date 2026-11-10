@@ -93,30 +93,52 @@ export function newClientSheet(ctx, onDone, c = null) {
 export function client(ctx, [id]) {
   const { db, m } = ctx;
   const c = db.get('client', Number(id));
-  if (!c) return { html: `${top({ title: 'Клиент не найден' })}<div class="content"><div class="empty">Такого клиента нет.</div></div>` };
+  if (!c) return { html: `${top({ title: 'Клиент не найден' })}<div class="content"><div class="empty">Такого клиента нет.</div></div>`, backTo: '#/clients' };
   const reqs = m.clientRequests(c.id);
+  const reqSummary = r => {
+    const items = m.requestItems(r.id);
+    const pc = db.all('purchase').filter(p => items.some(i => i.id === p.request_item_id)).length;
+    return `${r.status === 'active' ? 'ждёт' : r.status === 'closed' ? 'всё куплено' : 'снят с ожидания'} · ${items.length} ${plural(items.length, 'позиция', 'позиции', 'позиций')} · ${pc} ${plural(pc, 'покупка', 'покупки', 'покупок')}`;
+  };
+  if (c.is_archived) {
+    const html = `${top({ title: 'Клиент в архиве' })}
+    <div class="content" style="gap:12px;padding:16px 20px">
+      <div class="col" style="gap:4px"><h1 style="font-size:24px;font-weight:800">${esc(c.name)}</h1><span style="font-size:15px;font-weight:600" class="muted">${esc(c.phone || 'без телефона')}</span><span class="tag gray">В АРХИВЕ${c.archived_at ? ' С ' + fmtDate(c.archived_at) : ''}</span></div>
+      ${c.note ? `<div class="card tight"><span class="xs b muted">ЗАМЕТКИ</span><span class="small" style="white-space:pre-wrap">${esc(c.note)}</span></div>` : ''}
+      ${reqs.map(r => `<a class="card tight tap" href="#/request/${r.id}" style="gap:2px"><span style="font-size:14px;font-weight:700">${esc(m.requestTitle(r))}</span><span class="small muted">${reqSummary(r)}</span></a>`).join('') || '<span class="small muted">Запросов не было</span>'}
+      <button class="btn soft" id="unarch">Вернуть из архива</button>
+      <button class="btn" id="del" style="border:1.5px solid #B42318;color:#B42318;font-weight:800">Удалить навсегда</button>
+    </div>`;
+    return {
+      html, backTo: '#/archive/clients',
+      bind(root) {
+        root.querySelector('#unarch').onclick = async () => { db.put('client', { ...c, is_archived: 0, archived_at: null }); await ctx.save('Клиент возвращён'); ctx.refresh(); };
+        root.querySelector('#del').onclick = () => deleteClientDialog(ctx, c);
+      },
+    };
+  }
   const active = reqs.filter(r => r.status === 'active');
   const closed = reqs.filter(r => r.status !== 'active');
   const rems = m.clientReminders(c.id);
   const remWait = rems.filter(r => r.status === 'waiting');
   const remDone = rems.filter(r => r.status === 'done').reverse();
   const reqCard = r => {
-    const b = m.product(r.bundle_id);
     const pr = m.requestProgress(r.id);
-    return `<a class="card tight tap" href="#/request/${r.id}"><span style="font-size:15px;font-weight:700;line-height:1.3">${esc(b ? m.short(b) : '—')}</span><span class="xs b muted">${b ? esc(m.shapePattern(b)) + ' · ' : ''}запрос от ${fmtDate(r.created_at)}</span><span class="small b">${r.status === 'active' ? `Собрано ${pr.got} из ${pr.need} · ждёт ${pr.waiting}` : `закрыт ${fmtDate(r.closed_at)} · собрано ${pr.got} из ${pr.need}`}</span></a>`;
+    return `<a class="card tight tap" href="#/request/${r.id}"><span style="font-size:15px;font-weight:700;line-height:1.3">${esc(m.requestTitle(r))}</span><span class="xs b muted">${esc(m.requestSub(r))} · запрос от ${fmtDate(r.created_at)}</span><span class="small b">${r.status === 'active' ? `Собрано ${pr.got} из ${pr.need} · ждёт ${pr.waiting}` : `${r.status === 'closed' ? 'всё куплено' : 'снят с ожидания'} ${fmtDate(r.closed_at)} · собрано ${pr.got}`}</span></a>`;
   };
   const html = `${top({ title: c.name, right: `<button class="btn sm" id="edit">Изменить</button>` })}
   <div class="content">
-    <div class="col" style="gap:4px"><span style="font-size:15px;font-weight:600">${esc(c.phone || 'Телефон не указан')}</span>${c.is_archived ? '<span class="tag gray">клиент в архиве</span>' : ''}</div>
+    <div class="col" style="gap:4px"><span style="font-size:15px;font-weight:600">${esc(c.phone || 'Телефон не указан')}</span></div>
     ${phoneRow(c)}
     <div class="card tight tap" id="note"><span class="xs b muted">ЗАМЕТКИ</span><span style="font-size:14px;white-space:pre-wrap;line-height:1.4">${c.note ? esc(c.note) : '<span class="muted">Нажмите, чтобы добавить заметку</span>'}</span></div>
     <div class="between" style="align-items:center"><span class="label">Напоминания</span><button class="linkbtn small" id="addrem">${icon.plus}Напоминание</button></div>
     ${remWait.length ? remWait.map(r => `<div class="card tight tap ${r.remind_at < nowISO() ? 'warn' : ''}" data-rem="${r.id}"><span class="xs b" style="color:${r.remind_at < nowISO() ? 'var(--warn)' : 'var(--blue)'}">${r.remind_at < nowISO() ? 'ПРОСРОЧЕНО · ' : ''}${esc(humanDT(r.remind_at))}</span>${r.note ? `<span class="small">${esc(r.note)}</span>` : ''}</div>`).join('') : '<span class="small muted">Нет запланированных звонков</span>'}
     <div class="between" style="align-items:center"><span class="label">Собирает</span><a class="linkbtn small" href="#/client/${c.id}/new">${icon.plus}Новый запрос</a></div>
     ${active.length ? active.map(reqCard).join('') : '<span class="small muted">Активных запросов нет</span>'}
-    ${closed.length ? `<span class="label">Закрытые запросы</span>${closed.map(reqCard).join('')}` : ''}
+    <a class="linkbtn small" href="#/search">${icon.plus}Записать на отдельный товар (через поиск)</a>
+    ${closed.length ? `<span class="label">Архив запросов</span>${closed.map(reqCard).join('')}` : ''}
     ${remDone.length ? `<span class="label">История звонков</span><div class="list">${remDone.slice(0, 20).map(r => `<div class="li"><span class="small">${esc(r.note || 'Звонок')}</span><span class="xs muted nowrap">${fmtDate(r.done_at || r.remind_at)}</span></div>`).join('')}</div>` : ''}
-    <button class="btn" id="arch" style="margin-top:12px">${c.is_archived ? 'Вернуть из архива' : 'Перенести клиента в архив'}</button>
+    <button class="btn" id="arch" style="margin-top:12px">Перенести клиента в архив</button>
   </div>`;
   return {
     html, backTo: '#/clients',
@@ -128,13 +150,33 @@ export function client(ctx, [id]) {
       root.querySelector('#addrem').onclick = () => newReminderSheet(ctx, c);
       root.querySelectorAll('[data-rem]').forEach(el => el.onclick = () => reminderSheet(ctx, Number(el.dataset.rem)));
       root.querySelector('#arch').onclick = async () => {
-        if (!c.is_archived && !(await confirmSheet('Перенести клиента в архив? Он перестанет попадать в подбор. История сохранится.', 'В архив'))) return;
-        db.put('client', { ...c, is_archived: c.is_archived ? 0 : 1 });
-        await ctx.save(c.is_archived ? 'Клиент возвращён' : 'Клиент в архиве');
+        if (!(await confirmSheet('Перенести клиента в архив? Он перестанет попадать в подбор. История сохранится, клиента можно будет вернуть.', 'В архив'))) return;
+        db.put('client', { ...c, is_archived: 1, archived_at: todayISO() });
+        await ctx.save('Клиент в архиве');
         ctx.refresh();
       };
     },
   };
+}
+
+/** Удаление клиента навсегда: показывает, что исчезнет, и спрашивает ещё раз (ТЗ 4.5) */
+function deleteClientDialog(ctx, c) {
+  const f = ctx.m.clientFootprint(c.id);
+  const n = (x, a, b, d) => `${x} ${plural(x, a, b, d)}`;
+  sheet(`<h2 style="font-size:19px;font-weight:800;line-height:1.3">Удалить клиента «${esc(c.name)}» навсегда?</h2>
+    <div class="col" style="gap:6px;padding:12px 14px;background:#FDF1EF;border-radius:12px;font-size:14px;line-height:1.4"><span class="b">Исчезнут:</span>
+      <span>карточка клиента · ${n(f.reqs.length, 'запрос', 'запроса', 'запросов')} · ${n(f.items.length, 'позиция', 'позиции', 'позиций')} · ${n(f.purchases.length, 'покупка', 'покупки', 'покупок')} · ${n(f.reminders.length, 'напоминание', 'напоминания', 'напоминаний')}</span>
+      <span class="small muted">Товары, комплекты и цены не затрагиваются.</span></div>
+    <span style="font-size:14px;line-height:1.4">Вернуть данные будет нельзя. Они останутся только в резервных копиях, сделанных раньше.</span>
+    <div class="grid2"><button class="btn" id="no">Отмена</button><button class="btn" id="yes" style="background:#B42318;color:#fff;border:none;font-weight:800">Да, удалить</button></div>`, (el, close) => {
+    el.querySelector('#no').onclick = close;
+    el.querySelector('#yes').onclick = async () => {
+      ctx.m.deleteClient(c.id);
+      await ctx.save('Клиент удалён');
+      close();
+      location.replace('#/archive/clients');
+    };
+  });
 }
 
 // ================= Напоминания =================
@@ -285,85 +327,214 @@ function similarSheet(ctx, bundle, onAdd) {
 }
 
 // ================= Запрос =================
+const REASONS = ['Купил в другом месте', 'Передумал', 'Уже есть'];
+const STATUS = { active: 'ждёт', closed: 'всё куплено', withdrawn: 'снят с ожидания' };
+
 export function request(ctx, [id]) {
   const { db, m } = ctx;
   const r = db.get('request', Number(id));
-  if (!r) return { html: `${top({ title: 'Запрос не найден' })}` };
+  if (!r) return { html: `${top({ title: 'Запрос не найден' })}<div class="content"><div class="empty">Такого запроса нет.</div></div>` };
   const c = db.get('client', r.client_id);
-  const b = m.product(r.bundle_id);
+  const b = r.bundle_id ? m.product(r.bundle_id) : null;
   const items = m.requestItems(r.id);
   const pr = m.requestProgress(r.id);
   const waiting = items.filter(i => i.status === 'waiting');
-  const purchases = db.all('purchase').filter(p => items.some(i => i.id === p.request_item_id)).sort((a, b) => b.purchased_at.localeCompare(a.purchased_at) || b.id - a.id);
-  const notNeeded = items.filter(i => i.status === 'not_needed');
-  const itemCard = ri => {
+  const withdrawn = items.filter(i => i.status === 'withdrawn');
+  const bought = items.filter(i => i.status === 'bought');
+  const purchases = db.all('purchase').filter(p => items.some(i => i.id === p.request_item_id));
+  // «Уже собрано»: покупки, сгруппированные по дате
+  const byDate = new Map();
+  for (const p of purchases) {
+    if (!byDate.has(p.purchased_at)) byDate.set(p.purchased_at, []);
+    byDate.get(p.purchased_at).push(p);
+  }
+  const collected = [...byDate.entries()].sort((a, b) => b[0].localeCompare(a[0])).map(([d, list]) => {
+    const parts = list.map(p => `${esc(m.itemLabel(items.find(i => i.id === p.request_item_id)))} ${p.qty}`).join(' · ');
+    const notes = [...new Set(list.map(p => p.note).filter(Boolean))].join('; ');
+    return `<div class="between small" style="align-items:flex-start;padding:10px 14px;background:var(--card);border:1px solid var(--line);border-radius:14px"><span>${parts}${notes ? `<br><span class="xs muted">${esc(notes)}</span>` : ''}</span><span class="muted nowrap">${fmtShort(d)}</span></div>`;
+  }).join('');
+  const meta = ri => {
     const p = ri.product_id ? m.product(ri.product_id) : null;
-    const bought = m.bought(ri.id);
+    const got = m.bought(ri.id);
     const now = p ? m.currentPrice(p.id) : null;
-    const priceTxt = !p ? 'цена не указана' : ri.price_kop != null ? `при записи ${rub(ri.price_kop)}${now != null ? ` · сейчас ${rub(now)}` : ''}` : now != null ? `сейчас ${rub(now)}` : 'цены нет';
-    return `<div class="card tight tap" data-ri="${ri.id}"><div class="between" style="align-items:flex-start"><div class="col" style="gap:3px">
-      ${p ? `<span style="font-size:15px;font-weight:700">${esc(m.short(p))}</span><span class="xs b muted">${p.article ? 'арт. ' + esc(p.article) : 'без артикула'}</span>${!p.sold_separately ? '<span class="tag violet">только в составе</span>' : ''}`
-        : `<span class="tag violet">что-то подобное</span><span style="font-size:15px;font-weight:700">${esc(m.kindName(ri.kind_id))}</span><span class="xs b muted">${esc(m.shapeName(ri.shape_id))} · ${esc(m.patternName(ri.pattern_id))}</span>`}
-      <span class="small muted">${bought ? `${bought} из ${ri.qty_needed} уже куплены · ` : ''}${priceTxt}</span>${ri.note ? `<span class="xs muted">${esc(ri.note)}</span>` : ''}
-    </div><span class="qty">${Math.max(0, ri.qty_needed - bought)} шт</span></div></div>`;
+    const price = !p ? '' : ri.price_kop != null ? `при записи ${rub(ri.price_kop)}${now != null ? `, сейчас ${rub(now)}` : ''}` : now != null ? `сейчас ${rub(now)}` : '';
+    return [p?.article, got ? `куплено ${got} из ${ri.qty_needed}` : null, p && !p.sold_separately ? 'только в составе' : null, price, ri.updated_at ? `изменено ${fmtShort(ri.updated_at)}` : null].filter(Boolean).join(' · ');
   };
-  const html = `${top({ title: c?.name ?? '' })}
-  <div class="content" style="gap:10px">
-    <div class="col" style="gap:3px"><h1 style="font-size:19px;font-weight:800;line-height:1.25">${b ? `<a href="#/product/${b.id}" style="color:var(--ink)">${esc(m.short(b))}</a>` : '—'}</h1>
-      <span class="xs b muted">${b?.article ? 'арт. ' + esc(b.article) + ' · ' : ''}${b ? esc(m.shapePattern(b)) + ' · ' : ''}запрос от ${fmtDate(r.created_at)}</span>
-      <span class="small b">${r.status === 'active' ? `Собрано ${pr.got} из ${pr.need} · ждёт ${pr.waiting}` : `Запрос закрыт ${fmtDate(r.closed_at)} · собрано ${pr.got} из ${pr.need}`}</span></div>
+  const title = ri => ri.product_id ? esc(m.itemLabel(ri)) : `<span class="tag violet" style="margin-bottom:2px">что-то подобное</span><br>${esc(m.kindName(ri.kind_id))}`;
+  const waitCard = ri => `<div class="card" style="padding:12px;gap:8px;border-radius:14px">
+    <div class="between" style="align-items:flex-start"><div class="col" style="gap:2px"><span style="font-size:15px;font-weight:700">${title(ri)}</span><span class="xs muted">${ri.product_id ? esc(meta(ri)) : esc(m.shapeName(ri.shape_id) + ' · ' + m.patternName(ri.pattern_id))}</span>${ri.note ? `<span class="xs muted">${esc(ri.note)}</span>` : ''}</div><span class="qty">ждёт ${m.remaining(ri)}</span></div>
+    <div class="grid3" style="gap:6px"><button class="btn primary" style="height:44px;border-radius:12px;font-size:13px" data-buy="${ri.id}">Купил</button><button class="btn soft" style="height:44px;border-radius:12px;font-size:13px" data-edit="${ri.id}">Изменить</button><button class="btn" style="height:44px;border-radius:12px;font-size:13px;line-height:1.15" data-wd="${ri.id}">Снять с<br>ожидания</button></div></div>`;
+  const wdCard = ri => `<div class="card" style="padding:10px 12px;gap:6px;border-radius:14px;background:#FBFAF7">
+    <div class="between"><span style="font-size:14px;font-weight:700">${esc(m.itemLabel(ri))} · ${ri.qty_needed} шт</span><span class="xs muted">${fmtShort(ri.closed_at)}</span></div>
+    <span class="xs muted">Причина: ${esc(ri.withdraw_reason || '—')}${m.bought(ri.id) ? ` · куплено ${m.bought(ri.id)} шт` : ''}</span>
+    <div class="grid2" style="gap:6px"><button class="btn soft" style="height:40px;border-radius:12px;font-size:13px" data-back-item="${ri.id}">Вернуть в ожидание</button><button class="btn danger" style="height:40px;border-radius:12px;font-size:13px;border-color:#F0C7C2;color:#B42318" data-del="${ri.id}">Удалить навсегда</button></div></div>`;
+  const status = r.status === 'active' ? '' : ` · <span class="b">${STATUS[r.status]}${r.withdraw_reason ? ': ' + esc(r.withdraw_reason) : ''}</span>`;
+  const html = `${top({ title: c?.name ?? '', right: `<button class="linkbtn small" id="sim" style="padding:0 6px">${icon.plus}Подобное</button>` })}
+  <div class="content" style="gap:8px">
+    <div class="col" style="gap:2px"><h1 style="font-size:18px;font-weight:800;line-height:1.25">${b ? `<a href="#/product/${b.id}" style="color:var(--ink)">${esc(m.requestTitle(r))}</a>` : esc(m.requestTitle(r))}</h1>
+      <span class="xs muted">${b?.article ? 'арт. ' + esc(b.article) + ' · ' : ''}${esc(m.requestSub(r))} · с ${fmtDate(r.created_at)} · собрано ${pr.got} из ${pr.need} · ждёт ${pr.waiting}${status}</span></div>
     ${r.note ? `<div class="card tight"><span class="xs b muted">ЗАМЕТКИ</span><span class="small" style="white-space:pre-wrap">${esc(r.note)}</span></div>` : ''}
     <span class="label">Ждёт</span>
-    ${waiting.length ? waiting.map(itemCard).join('') : '<span class="small muted">Ничего не ждёт</span>'}
-    <button class="linkbtn" id="sim">${icon.plus}Добавить «что-то подобное»</button>
-    ${purchases.length ? `<span class="label">Уже собрано</span><div class="card tight" style="gap:6px;font-size:14px">${purchases.map(p => { const ri = items.find(i => i.id === p.request_item_id); return `<div class="between"><span>${esc(m.itemLabel(ri))}${p.note ? `<br><span class="xs muted">${esc(p.note)}</span>` : ''}</span><span class="muted nowrap">${p.qty} шт · ${fmtShort(p.purchased_at)}</span></div>`; }).join('')}</div>` : ''}
-    ${notNeeded.length ? `<span class="label">Не нужно</span><div class="list">${notNeeded.map(ri => `<div class="li tap" data-ri="${ri.id}"><span class="small">${esc(m.itemLabel(ri))}${ri.product_id && m.product(ri.product_id)?.article ? `<br><span class="xs muted">${esc(m.product(ri.product_id).article)}</span>` : ''}</span><span class="xs muted">${esc(ri.note || 'не нужно')}</span></div>`).join('')}</div>` : ''}
+    ${waiting.length ? waiting.map(waitCard).join('') : '<span class="small muted">Ничего не ждёт</span>'}
+    ${bought.length ? `<span class="label">Куплено полностью</span><div class="list">${bought.map(ri => `<div class="li"><span class="small">${esc(m.itemLabel(ri))} · ${ri.qty_needed} шт</span><button class="linkbtn xs" data-edit="${ri.id}">Изменить</button></div>`).join('')}</div>` : ''}
+    ${collected ? `<span class="label">Уже собрано</span>${collected}` : ''}
+    ${withdrawn.length ? `<span class="label">Снято с ожидания</span>${withdrawn.map(wdCard).join('')}` : ''}
     <div class="grid2" style="margin-top:8px"><button class="btn" id="rem">Напоминание</button><button class="btn" id="note">Заметка</button></div>
-    <button class="btn" id="close">${r.status === 'active' ? 'Закрыть запрос (в архив)' : 'Вернуть запрос в работу'}</button>
+    ${r.status === 'active' ? '<button class="btn" id="wdall">Снять весь запрос с ожидания</button>'
+      : `<button class="btn soft" id="reopen">Вернуть запрос в ожидание</button><button class="btn danger" id="delreq" style="border-color:#F0C7C2;color:#B42318">Удалить запрос навсегда</button>`}
   </div>`;
   return {
     html, backTo: '#/client/' + r.client_id,
     bind(root) {
-      root.querySelectorAll('[data-ri]').forEach(el => el.onclick = () => itemSheet(ctx, Number(el.dataset.ri)));
+      const on = (sel, fn) => root.querySelectorAll(sel).forEach(el => el.addEventListener('click', () => fn(el)));
+      on('[data-buy]', el => buySheet(ctx, Number(el.dataset.buy)));
+      on('[data-edit]', el => editItemSheet(ctx, Number(el.dataset.edit)));
+      on('[data-wd]', el => withdrawSheet(ctx, { riId: Number(el.dataset.wd) }));
+      on('[data-back-item]', async el => { m.reopenItem(Number(el.dataset.backItem)); await ctx.save('Позиция снова ждёт'); ctx.refresh(); });
+      on('[data-del]', async el => {
+        const ri = db.get('request_item', Number(el.dataset.del));
+        const got = m.bought(ri.id);
+        if (!(await confirmSheet(`Удалить позицию «${esc(m.itemLabel(ri))}» навсегда?${got ? `<br><span class="small" style="font-weight:500">Покупки по ней (${got} шт) тоже исчезнут из «Уже собрано».</span>` : ''}`, 'Удалить', { danger: true }))) return;
+        m.deleteItem(ri.id); await ctx.save('Удалено'); ctx.refresh();
+      });
       root.querySelector('#sim').onclick = () => similarSheet(ctx, b, async s => { m.addSimilar(r.id, s); await ctx.save('Добавлено'); ctx.refresh(); });
       root.querySelector('#rem').onclick = () => newReminderSheet(ctx, c, { request_id: r.id });
       root.querySelector('#note').onclick = () => sheet(`<h1 class="h-screen">Заметка к запросу</h1><label class="field"><textarea id="t" rows="5">${esc(r.note ?? '')}</textarea></label><button class="btn primary big" id="ok">Сохранить</button>`, (el, close) => {
         el.querySelector('#ok').onclick = async () => { db.put('request', { ...r, note: el.querySelector('#t').value.trim() || null }); await ctx.save(); close(); ctx.refresh(); };
       });
-      root.querySelector('#close').onclick = async () => {
-        if (r.status === 'active') {
-          if (!(await confirmSheet('Закрыть запрос? Несобранные позиции будут отмечены «не нужно». Запрос останется в архиве.', 'Закрыть'))) return;
-          m.closeRequest(r.id);
-        } else db.put('request', { ...r, status: 'active', closed_at: null });
-        await ctx.save(); ctx.refresh();
-      };
+      root.querySelector('#wdall')?.addEventListener('click', () => withdrawSheet(ctx, { requestId: r.id }));
+      root.querySelector('#reopen')?.addEventListener('click', async () => { m.reopenRequest(r.id); await ctx.save('Запрос снова ждёт'); ctx.refresh(); });
+      root.querySelector('#delreq')?.addEventListener('click', async () => {
+        const n = items.length, p = purchases.length;
+        if (!(await confirmSheet(`Удалить запрос «${esc(m.requestTitle(r))}» навсегда?<br><span class="small" style="font-weight:500">Исчезнут ${n} ${plural(n, 'позиция', 'позиции', 'позиций')}${p ? ` и ${p} ${plural(p, 'покупка', 'покупки', 'покупок')}` : ''}. Вернуть будет нельзя.</span>`, 'Удалить', { danger: true }))) return;
+        m.deleteRequest(r.id); await ctx.save('Запрос удалён'); location.replace('#/client/' + r.client_id);
+      });
     },
   };
 }
 
-function itemSheet(ctx, riId) {
-  const { m } = ctx;
-  const ri = ctx.db.get('request_item', riId);
+const itemCtx = (ctx, ri) => {
+  const { m, db } = ctx;
+  const r = db.get('request', ri.request_id);
+  const c = db.get('client', r.client_id);
+  const p = ri.product_id ? m.product(ri.product_id) : null;
+  return `${esc(m.itemLabel(ri))}${p?.article ? ' · ' + esc(p.article) : ''}<br>${esc(m.requestTitle(r))}, ${esc(c?.name ?? '')}`;
+};
+
+/** «Купил»: сколько штук и дата */
+export function buySheet(ctx, riId) {
+  const { m, db } = ctx;
+  const ri = db.get('request_item', riId);
   const rem = m.remaining(ri);
-  const label = m.itemLabel(ri);
-  if (ri.status !== 'waiting') {
-    sheet(`<h1 class="h-screen">${esc(label)}</h1><span class="small muted">${ri.status === 'bought' ? 'Куплено' : 'Не нужно'}${ri.closed_at ? ' · ' + fmtDate(ri.closed_at) : ''}</span>
-      ${ri.status === 'not_needed' ? '<button class="btn primary big" id="re">Вернуть в ожидание</button>' : ''}`, (el, close) => {
-      el.querySelector('#re')?.addEventListener('click', async () => {
-        m.reopenItem(ri.id);
-        await ctx.save('Позиция снова ждёт'); close(); ctx.refresh();
-      });
-    });
-    return;
-  }
-  sheet(`<h1 class="h-screen">${esc(label)}</h1><span class="small muted">Ждёт ${rem} шт${ri.product_id ? '' : ' · подойдёт любой товар с таким видом, формой и рисунком'}</span>
-    <div class="between" style="align-items:center;padding:12px 14px;background:var(--bg);border-radius:14px"><span style="font-size:15px;font-weight:600">Купил(а)</span>${stepperHTML('n', rem, 1, rem)}</div>
+  sheet(`<h1 class="h-screen">Купил</h1><span class="small muted" style="margin-top:-10px;line-height:1.4">${itemCtx(ctx, ri)}</span>
+    <div class="between" style="align-items:center;padding:12px 14px;background:var(--bg);border-radius:14px"><span style="font-size:15px;font-weight:600;line-height:1.3">Сколько купил<br><span class="small muted" style="font-weight:500">ждёт ${rem} шт</span></span>${stepperHTML('n', rem, 1, rem)}</div>
+    <span class="small b" id="after"></span>
     <label class="field"><span class="fl">Дата покупки</span><input id="dt" type="date" value="${todayISO()}"></label>
-    <button class="btn primary big" id="buy">Записать покупку</button>
-    <label class="field"><span class="fl">Если не нужно — почему</span><input id="why" placeholder="например, купила в другом месте"></label>
-    <button class="btn" id="no">Не нужно</button>`, (el, close) => {
-    bindSteppers(el);
-    el.querySelector('#buy').onclick = async () => { m.buy(ri.id, stepVal(el, 'n'), null, el.querySelector('#dt').value || todayISO()); await ctx.save('Покупка записана'); close(); ctx.refresh(); };
-    el.querySelector('#no').onclick = async () => { m.notNeeded(ri.id, el.querySelector('#why').value.trim() || 'не нужно'); await ctx.save('Отмечено «не нужно»'); close(); ctx.refresh(); };
+    <div class="grid2"><button class="btn" id="no">Отмена</button><button class="btn primary" id="ok">Записать покупку</button></div>`, (el, close) => {
+    const upd = () => { const n = stepVal(el, 'n'); el.querySelector('#after').textContent = rem - n > 0 ? `Будет ждать: ${rem - n} шт` : 'Куплено всё — позиция закроется'; };
+    bindSteppers(el, upd); upd();
+    el.querySelector('#no').onclick = close;
+    el.querySelector('#ok').onclick = async () => { m.buy(ri.id, stepVal(el, 'n'), null, el.querySelector('#dt').value || todayISO()); await ctx.save('Покупка записана'); close(); ctx.refresh(); };
   });
+}
+
+/** «Изменить»: количество (не меньше купленного) и заметка */
+export function editItemSheet(ctx, riId) {
+  const { m, db } = ctx;
+  const ri = db.get('request_item', riId);
+  const got = m.bought(ri.id);
+  const min = Math.max(1, got);
+  sheet(`<h1 class="h-screen">Изменить позицию</h1><span class="small muted" style="margin-top:-10px;line-height:1.4">${itemCtx(ctx, ri)}</span>
+    <div class="between" style="align-items:center;padding:12px 14px;background:var(--bg);border-radius:14px"><span style="font-size:15px;font-weight:600;line-height:1.3">Нужно всего<br><span class="small muted" style="font-weight:500">было ${ri.qty_needed}</span></span>${stepperHTML('n', ri.qty_needed, min, 999)}</div>
+    <div class="col small muted" style="margin-top:-6px">${got ? `<span>Уже куплено ${got} — меньше ${got} поставить нельзя.</span>` : ''}<span class="b" style="color:var(--ink)" id="will"></span></div>
+    <label class="field"><span class="fl">Заметка</span><textarea id="nt" rows="2">${esc(ri.note ?? '')}</textarea></label>
+    <span class="note blue">Это исправление заказа, а не покупка. Цена, дата записи ${fmtDate(ri.created_at)} и место в очереди сохранятся.</span>
+    <div class="grid2"><button class="btn" id="no">Отмена</button><button class="btn primary" id="ok">Сохранить</button></div>`, (el, close) => {
+    const upd = () => { el.querySelector('#will').textContent = `Будет ждать: ${stepVal(el, 'n') - got} шт`; };
+    bindSteppers(el, upd); upd();
+    el.querySelector('#no').onclick = close;
+    el.querySelector('#ok').onclick = async () => {
+      try { m.editItem(ri.id, stepVal(el, 'n'), el.querySelector('#nt').value); } catch (e) { toast(e.message); return; }
+      await ctx.save('Позиция исправлена'); close(); ctx.refresh();
+    };
+  });
+}
+
+/** «Снять с ожидания» — позицию ({ riId }) или весь запрос ({ requestId }) */
+export function withdrawSheet(ctx, { riId = null, requestId = null }) {
+  const { m, db } = ctx;
+  const ri = riId ? db.get('request_item', riId) : null;
+  const r = requestId ? db.get('request', requestId) : null;
+  const got = ri ? m.bought(ri.id) : 0;
+  const head = ri ? `${itemCtx(ctx, ri).replace('<br>', ` · ждёт ${m.remaining(ri)} шт<br>`)}` : `${esc(m.requestTitle(r))} · ждёт ${m.requestProgress(r.id).waiting} шт`;
+  sheet(`<h1 class="h-screen">${ri ? 'Снять с ожидания' : 'Снять весь запрос'}</h1><span class="small muted" style="margin-top:-10px;line-height:1.4">${head}</span>
+    <div class="col" style="gap:8px"><span class="fl">Причина</span><div class="row wrap" style="gap:8px">${[...REASONS, 'Другое…'].map((x, i) => `<button type="button" class="chip ${i === 0 ? 'on' : ''}" data-reason="${esc(x)}">${esc(x)}</button>`).join('')}</div></div>
+    <label class="field"><span class="fl" id="cl">Комментарий (необязательно)</span><textarea id="cm" rows="2"></textarea></label>
+    <div class="inset small" style="line-height:1.4">${ri ? `<span>Позиция перестанет попадать в подбор и уйдёт в архив запроса.</span>${got ? `<span>Купленные ${got} шт останутся в «Уже собрано».</span>` : ''}<span>Из архива её можно вернуть или удалить навсегда.</span>`
+      : '<span>Все ждущие позиции снимутся с этой причиной, запрос уйдёт в архив.</span><span>Купленное останется в «Уже собрано». Запрос можно вернуть или удалить навсегда.</span>'}</div>
+    <div class="grid2"><button class="btn" id="no">Отмена</button><button class="btn primary" id="ok">Снять с ожидания</button></div>`, (el, close) => {
+    let reason = REASONS[0];
+    el.querySelectorAll('[data-reason]').forEach(b => b.onclick = () => {
+      reason = b.dataset.reason;
+      el.querySelectorAll('[data-reason]').forEach(x => x.classList.toggle('on', x === b));
+      el.querySelector('#cl').textContent = reason === 'Другое…' ? 'Причина' : 'Комментарий (необязательно)';
+    });
+    el.querySelector('#no').onclick = close;
+    el.querySelector('#ok').onclick = async () => {
+      const cm = el.querySelector('#cm').value.trim();
+      if (reason === 'Другое…' && !cm) { toast('Напишите причину'); return; }
+      const text = reason === 'Другое…' ? cm : cm ? `${reason.toLowerCase()}: ${cm}` : reason.toLowerCase();
+      if (ri) m.withdraw(ri.id, text); else m.withdrawRequest(r.id, text);
+      await ctx.save('Снято с ожидания'); close(); ctx.refresh();
+    };
+  });
+}
+
+// ================= Записать клиента на товар =================
+export function addToList(ctx, [pid], query) {
+  const { db, m } = ctx;
+  const p = m.product(pid);
+  if (!p) return { html: `${top({ title: 'Товар не найден' })}` };
+  const st = ctx.state.add?.pid === p.id ? ctx.state.add : (ctx.state.add = { pid: p.id, cid: query.c ? Number(query.c) : null, qty: 1, target: null });
+  if (query.c) st.cid = Number(query.c);
+  const c = st.cid ? db.get('client', st.cid) : null;
+  const price = m.currentPrice(p.id);
+  const leaves = m.leaves(p.id).filter(l => !l.product.is_packaging);
+  const isB = leaves.length > 1 || (leaves[0] && leaves[0].product.id !== p.id);
+  let targets = [];
+  if (c) {
+    targets = m.matchingRequests(c.id, p.id).map(r => ({ id: r.id, title: m.requestTitle(r), sub: `Подходит: та же форма ${m.shapeName(p.shape_id)} и рисунок ${m.patternName(p.pattern_id)}` }));
+    const loose = m.looseRequest(c.id);
+    const n = loose ? m.requestItems(loose.id).filter(i => i.status === 'waiting').length : 0;
+    targets.push({ id: 'loose', title: 'Отдельные товары', sub: loose ? `Запрос без комплекта · сейчас там ${n} ${plural(n, 'позиция', 'позиции', 'позиций')}` : 'Запрос без комплекта — будет создан' });
+    if (!targets.some(t => t.id === st.target)) st.target = targets[0].id;
+  }
+  const html = `${top({ title: 'Записать клиента' })}
+  <div class="content" style="gap:14px">
+    <a class="card tight" href="#/product/${p.id}" style="gap:2px"><span style="font-size:16px;font-weight:800;line-height:1.3">${esc(m.short(p))}${m.shapePattern(p) ? ', ' + esc(m.shapePattern(p).replace(' · ', ', ')) : ''}</span><span class="xs b muted">${p.article ? 'арт. ' + esc(p.article) : 'без артикула'}${price != null ? ' · сейчас ' + rub(price) : ''}</span>
+      ${isB ? `<span class="xs muted">Это комплект: в лист ожидания попадут ${leaves.map(l => `${esc((m.kindName(l.product.kind_id) || m.short(l.product)).toLowerCase())} × ${l.qty}`).join(', ')}</span>` : ''}</a>
+    <div class="col" style="gap:6px"><span class="fl">Клиент</span>
+      ${c ? `<div class="card tight sel" style="flex-direction:row;align-items:center;gap:10px"><span class="col grow" style="gap:1px"><span style="font-size:15px;font-weight:700">${esc(c.name)}</span><span class="xs muted">${esc(c.phone || 'без телефона')}</span></span><button class="btn sm soft" id="pick">Сменить</button></div>`
+        : `<button class="btn primary" id="pick">Выбрать клиента</button>`}
+      <button class="linkbtn" id="newc">${icon.plus}Новый клиент</button></div>
+    <div class="between" style="align-items:center;padding:10px 14px;background:var(--card);border:1px solid var(--line);border-radius:14px"><span style="font-size:15px;font-weight:700">Сколько нужно${isB ? '<br><span class="xs muted" style="font-weight:500">комплектов</span>' : ''}</span>${stepperHTML('q', st.qty, 1, 99)}</div>
+    ${c ? `<div class="col" style="gap:8px"><span class="fl">Куда добавить</span>${targets.map(t => `<button class="card tight" style="flex-direction:row;align-items:flex-start;gap:12px;text-align:left;${st.target === t.id ? 'border:2px solid var(--blue);background:var(--blue-soft)' : ''}" data-t="${t.id}"><span style="width:22px;height:22px;border-radius:11px;border:2px solid ${st.target === t.id ? 'var(--blue)' : '#B8B2A7'};display:flex;align-items:center;justify-content:center;flex-shrink:0">${st.target === t.id ? '<span style="width:10px;height:10px;border-radius:5px;background:var(--blue)"></span>' : ''}</span><span class="col" style="gap:2px"><span style="font-size:15px;font-weight:700;line-height:1.3">${esc(t.title)}</span><span class="xs muted" style="line-height:1.35">${esc(t.sub)}</span></span></button>`).join('')}</div>` : ''}
+    <span class="note blue">${price != null && !isB ? `Запомнятся цена ${rub(price)} и дата ${fmtDate(todayISO())}.` : `Запомнится дата ${fmtDate(todayISO())}${isB ? ' и цены предметов, если они есть' : ''}.`} Место в очереди — по этой дате.</span>
+    <button class="btn primary big" id="ok" ${c ? '' : 'disabled'}>Записать в лист ожидания</button>
+  </div>`;
+  return {
+    html,
+    bind(root) {
+      bindSteppers(root, (_, n) => { st.qty = n; });
+      root.querySelector('#pick').onclick = async () => { const { pickClientSheet } = await import('./screens-products.js'); pickClientSheet(ctx, cid => { st.cid = cid; st.target = null; ctx.refresh(); }); };
+      root.querySelector('#newc').onclick = () => newClientSheet(ctx, cl => { st.cid = cl.id; st.target = null; ctx.refresh(); });
+      root.querySelectorAll('[data-t]').forEach(b => b.onclick = () => { st.target = b.dataset.t === 'loose' ? 'loose' : Number(b.dataset.t); ctx.refresh(); });
+      root.querySelector('#ok').onclick = async () => {
+        const res = m.addToList(c.id, p.id, st.qty, st.target === 'loose' ? null : st.target);
+        ctx.state.add = null;
+        await ctx.save('Записано в лист ожидания');
+        location.replace('#/request/' + res.request.id);
+      };
+    },
+  };
 }
