@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Клиент в архиве</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+a{color:#1F4FB4;text-decoration:none}a:hover{color:#163A86}
+button,input,textarea{font:inherit;cursor:pointer}
+</style>
+</helmet>
+<div style="width: 390px; height: 844px; box-sizing: border-box; background: #F7F5F0; color: #1C2333; font-family: 'Manrope', system-ui, sans-serif; display: flex; flex-direction: column; overflow: hidden">
+
+  <div style="flex: 1; position: relative; display: flex; flex-direction: column; overflow: hidden">
+    <div style="display: flex; align-items: center; gap: 4px; padding: 8px 12px 8px 8px; background: #FFFFFF; border-bottom: 1px solid #E4E0D8"><a href="More.dc.html" aria-label="Назад" style="width: 44px; height: 44px; display: flex; align-items: center; justify-content: center; color: #1C2333; flex-shrink: 0"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6"></path></svg></a><span style="flex: 1; font-size: 17px; font-weight: 800">Клиент в архиве</span></div>
+    <div style="display: flex; flex-direction: column; gap: 12px; padding: 16px 20px">
+      <div style="display: flex; flex-direction: column; gap: 4px">
+        <h1 style="margin: 0; font-size: 24px; font-weight: 800">Марина Петрова</h1>
+        <span style="font-size: 15px; font-weight: 600; color: #5B6474">+7 926 555-12-34</span>
+        <span style="align-self: flex-start; font-size: 11px; font-weight: 700; color: #5B6474; background: #ECE8E0; padding: 3px 8px; border-radius: 6px">В АРХИВЕ С 05.11.2026</span>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 8px; padding: 14px; background: #FFFFFF; border: 1px solid #E4E0D8; border-radius: 16px; padding: 12px 14px; gap: 2px; border-radius: 14px"><span style="font-size: 14px; font-weight: 700">Сервиз чайный «Саламандра Грей»</span><span style="font-size: 13px; color: #5B6474">снят с ожидания · 13 позиций · 2 покупки</span></div>
+      <div style="display: flex; flex-direction: column; gap: 8px; padding: 14px; background: #FFFFFF; border: 1px solid #E4E0D8; border-radius: 16px; padding: 12px 14px; gap: 2px; border-radius: 14px"><span style="font-size: 14px; font-weight: 700">Отдельные товары</span><span style="font-size: 13px; color: #5B6474">снят с ожидания · 18 позиций · 2 покупки</span></div>
+      <button style="height: 48px; border-radius: 14px; border: 1px solid #C9D4EE; background: #EEF2FB; color: #1F4FB4; font-size: 15px; font-weight: 700">Вернуть из архива</button>
+      <button style="height: 48px; border-radius: 14px; border: 1.5px solid #B42318; background: #FFFFFF; color: #B42318; font-size: 15px; font-weight: 800">Удалить навсегда</button>
+    </div>
+    <div style="position: absolute; inset: 0; background: rgba(28,35,51,0.55); display: flex; align-items: center; justify-content: center; padding: 20px">
+      <div role="dialog" aria-label="Подтверждение удаления" style="display: flex; flex-direction: column; gap: 14px; padding: 20px; background: #FFFFFF; border-radius: 20px; width: 100%; box-sizing: border-box">
+        <h2 style="margin: 0; font-size: 19px; font-weight: 800; line-height: 1.3">Удалить Марину Петрову навсегда?</h2>
+        <div style="display: flex; flex-direction: column; gap: 6px; padding: 12px 14px; background: #FDF1EF; border-radius: 12px; font-size: 14px; line-height: 1.4">
+          <span style="font-weight: 700">Исчезнут:</span>
+          <span>2 запроса · 31 позиция · 4 покупки · 3 напоминания</span>
+          <span style="color: #5B6474; font-size: 13px">Товары, комплекты и цены не затрагиваются.</span>
+        </div>
+        <span style="font-size: 14px; line-height: 1.4">Вернуть данные будет нельзя. Они останутся только в резервных копиях, сделанных раньше.</span>
+        <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px"><a href="ArchivedClient.dc.html" style="height: 52px; border-radius: 14px; border: 1px solid #D9D4CA; background: #FFFFFF; color: #1C2333; font-size: 15px; font-weight: 700; display: flex; align-items: center; justify-content: center">Отмена</a><a href="More.dc.html" style="height: 52px; border-radius: 14px; background: #B42318; color: #FFFFFF; font-size: 15px; font-weight: 800; display: flex; align-items: center; justify-content: center; text-align: center">Да, удалить</a></div>
+      </div>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":390,"height":844}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+</body>
+</html>
