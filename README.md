@@ -24,6 +24,7 @@ data/
     kindmap.json        соответствие видов изделий (из «Соответствие_видов.xlsx»)
 icons/
 tools/build-seed.mjs    пересборка data/*.json из файлов Excel (Node 18+)
+tools/catalog/          выгрузка каталога с ipm.ru: код сбора, сборка Excel и инструкция (README.md внутри)
 ```
 
 Сторонних библиотек нет, сборка не нужна.
