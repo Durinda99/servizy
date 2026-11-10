@@ -28,6 +28,14 @@ document.addEventListener('click', e => {
   box.querySelector('[data-rcustom]').classList.toggle('hide', chip.dataset.rchip !== 'custom');
 });
 
+/** Переключатель «По частям / Целиком» (эскизы 7, 16) */
+export const modeToggle = mode => `<div class="col" style="gap:6px"><span class="fl">Как ждёт</span>
+  <div class="grid2" style="gap:6px;padding:4px;background:var(--line2);border-radius:14px">
+    <button class="btn" data-mode="parts" style="height:auto;min-height:52px;flex-direction:column;gap:0;border-radius:11px;${mode === 'parts' ? 'border:1.5px solid var(--blue);background:var(--card);color:var(--ink)' : 'border:none;background:transparent;color:var(--muted)'}"><span>По частям</span><span class="xs" style="font-weight:500">предметы состава</span></button>
+    <button class="btn" data-mode="whole" style="height:auto;min-height:52px;flex-direction:column;gap:0;border-radius:11px;${mode === 'whole' ? 'border:1.5px solid var(--blue);background:var(--card);color:var(--ink)' : 'border:none;background:transparent;color:var(--muted)'}"><span>Целиком</span><span class="xs" style="font-weight:500">одной позицией</span></button>
+  </div></div>`;
+export const compText = (m, pid) => m.bundleItems(pid).filter(b => !b.product.is_packaging).map(b => `${esc(m.short(b.product))} ${b.quantity}`).join(' · ');
+
 const phoneRow = c => c.phone ? `<div class="grid3"><a class="btn primary" href="${telHref(c.phone)}">Позвонить</a><a class="btn soft" href="${smsHref(c.phone)}">СМС</a><a class="btn soft" href="${waHref(c.phone)}" target="_blank" rel="noopener">WhatsApp</a></div>` : '';
 
 // ================= Список клиентов =================
@@ -229,16 +237,28 @@ export function newRequest(ctx, [cid, pid], query) {
     key,
     lines: m.leaves(bundle.id).map(l => ({ product_id: l.product.id, qty: l.qty, full: l.qty })),
     similar: [],
+    mode: query.mode === 'whole' ? 'whole' : 'parts',
+    wholeQty: 1,
   });
+  const canWhole = m.isBundle(bundle.id);
+  if (!canWhole) st.mode = 'parts';
+  const whole = st.mode === 'whole';
   const total = () => st.lines.reduce((s, l) => s + l.qty, 0) + st.similar.reduce((s, l) => s + l.qty, 0);
   const nItems = m.leaves(bundle.id).reduce((s, l) => s + l.qty, 0);
   const price = m.currentPrice(bundle.id);
   const html = `${top({ title: 'Новый запрос' })}
   <div class="content" style="gap:10px">
     <span class="fl">Клиент: ${esc(c.name)}</span>
-    <div class="col" style="gap:6px"><span class="fl">Какой комплект собирает</span>
+    <div class="col" style="gap:6px"><span class="fl">${whole ? 'Какой комплект ждёт' : 'Какой комплект собирает'}</span>
       <div class="card tight sel" style="flex-direction:row;align-items:center;gap:10px"><div class="col grow" style="gap:2px"><span style="font-size:15px;font-weight:700;line-height:1.3">${esc(m.short(bundle))}</span><span class="xs b muted">${esc(m.shapePattern(bundle))}</span><span class="xs b muted">${bundle.article ? 'арт. ' + esc(bundle.article) + ' · ' : ''}${nItems} ${plural(nItems, 'предмет', 'предмета', 'предметов')}${price != null ? ' · ' + rub(price) : ''}</span></div><a class="btn sm soft" href="#/client/${c.id}/new">Сменить</a></div></div>
-    <span class="fl" style="margin-top:4px">Состав из каталога — уберите то, что уже есть</span>
+    ${canWhole ? modeToggle(st.mode) : ''}
+    ${whole ? `<span class="fl" style="margin-top:4px">В листе ожидания будет одна позиция</span>
+      <div class="card tight" style="flex-direction:row;align-items:center;gap:10px"><div class="col grow" style="gap:2px"><span style="font-size:15px;font-weight:700;line-height:1.3">${esc(m.short(bundle))} целиком</span><span class="xs b muted">${bundle.article ? 'арт. ' + esc(bundle.article) : ''}${price != null ? ' · ' + rub(price) : ''}</span><span class="tag violet">комплект целиком</span></div>${stepperHTML('w', st.wholeQty, 1, 99)}</div>
+      <div class="card tight" style="border-style:dashed"><span class="small b">Что внутри</span><span class="small muted" style="line-height:1.4">${compText(m, bundle.id)}</span></div>
+      <label class="field"><span class="fl">Заметка к запросу</span><textarea id="nt" rows="2" placeholder="необязательно">${esc(st.note ?? '')}</textarea></label>
+      <div class="note blue"><span><span class="b">Клиент попадёт в подбор, когда придёт этот комплект.</span> Если придёт только предмет из него, клиент будет в конце списка с пометкой «ждёт комплект целиком».<br>Передумает ждать целиком — позицию можно разбить на состав в запросе.</span></div>
+      <button class="btn primary big" id="okw">Записать в лист ожидания</button>
+    </div>` : `<span class="fl" style="margin-top:4px">Состав из каталога — уберите то, что уже есть</span>
     ${st.lines.map((l, i) => {
       const p = m.product(l.product_id);
       const pr = m.currentPrice(p.id);
@@ -249,10 +269,22 @@ export function newRequest(ctx, [cid, pid], query) {
     <label class="field"><span class="fl">Заметка к запросу</span><textarea id="nt" rows="2" placeholder="необязательно">${esc(st.note ?? '')}</textarea></label>
     <div class="note blue" id="sum"></div>
     <button class="btn primary big" id="ok">Записать в лист ожидания</button>
-  </div>`;
+  </div>`}`;
   return {
     html,
     bind(root) {
+      root.querySelectorAll('[data-mode]').forEach(b => b.onclick = () => { st.mode = b.dataset.mode; ctx.refresh(); });
+      if (whole) {
+        bindSteppers(root, (_, n) => { st.wholeQty = n; });
+        root.querySelector('#nt').oninput = e => { st.note = e.target.value; };
+        root.querySelector('#okw').onclick = async () => {
+          const r = m.createRequest(c.id, bundle.id, [], [], st.note?.trim() || null, { whole: st.wholeQty });
+          ctx.state.newReq = null;
+          await ctx.save('Записано в лист ожидания');
+          location.replace('#/request/' + r.id);
+        };
+        return;
+      }
       const sum = root.querySelector('#sum');
       const drawSum = () => {
         const withPrice = st.lines.filter(l => l.qty > 0 && m.currentPrice(l.product_id) != null).length;
@@ -340,6 +372,7 @@ export function request(ctx, [id]) {
   const pr = m.requestProgress(r.id);
   const waiting = items.filter(i => i.status === 'waiting');
   const withdrawn = items.filter(i => i.status === 'withdrawn');
+  const splitDone = items.filter(i => i.status === 'split');
   const bought = items.filter(i => i.status === 'bought');
   const purchases = db.all('purchase').filter(p => items.some(i => i.id === p.request_item_id));
   // «Уже собрано»: покупки, сгруппированные по дате
@@ -361,7 +394,18 @@ export function request(ctx, [id]) {
     return [p?.article, got ? `куплено ${got} из ${ri.qty_needed}` : null, p && !p.sold_separately ? 'только в составе' : null, price, ri.updated_at ? `изменено ${fmtShort(ri.updated_at)}` : null].filter(Boolean).join(' · ');
   };
   const title = ri => ri.product_id ? esc(m.itemLabel(ri)) : `<span class="tag violet" style="margin-bottom:2px">что-то подобное</span><br>${esc(m.kindName(ri.kind_id))}`;
-  const waitCard = ri => `<div class="card" style="padding:12px;gap:8px;border-radius:14px">
+  const wholeCard = ri => {
+    const p = m.product(ri.product_id);
+    const got = m.bought(ri.id);
+    const now = m.currentPrice(p.id);
+    const price = ri.price_kop != null ? `при записи ${rub(ri.price_kop)}${now != null ? `, сейчас ${rub(now)}` : ''}` : now != null ? `сейчас ${rub(now)}` : 'цены нет';
+    return `<div class="card" style="padding:12px;gap:8px;border-radius:14px">
+    <div class="between" style="align-items:flex-start"><div class="col" style="gap:3px"><span style="font-size:15px;font-weight:700">${esc(m.short(p))} целиком</span><span class="xs muted">${got ? `куплено ${got} из ${ri.qty_needed} · ` : ''}${esc(price)}</span><span class="tag violet">комплект целиком</span>${ri.note ? `<span class="xs muted">${esc(ri.note)}</span>` : ''}</div><span class="qty">ждёт ${m.remaining(ri)}</span></div>
+    <div class="inset xs muted" style="line-height:1.4">${compText(m, p.id)}</div>
+    <div class="grid2" style="gap:6px"><button class="btn primary" style="height:44px;border-radius:12px;font-size:13px" data-buy="${ri.id}">Купил</button><button class="btn soft" style="height:44px;border-radius:12px;font-size:13px" data-edit="${ri.id}">Изменить</button>
+      <button class="btn" style="height:44px;border-radius:12px;font-size:13px;color:var(--violet);background:var(--violet-soft);border-color:#DCCFEA" data-split="${ri.id}">${icon.split.replace('width="20" height="20"', 'width="16" height="16"')} Разбить на состав</button><button class="btn" style="height:44px;border-radius:12px;font-size:13px" data-wd="${ri.id}">Снять с ожидания</button></div></div>`;
+  };
+  const waitCard = ri => m.isWhole(ri) ? wholeCard(ri) : `<div class="card" style="padding:12px;gap:8px;border-radius:14px">
     <div class="between" style="align-items:flex-start"><div class="col" style="gap:2px"><span style="font-size:15px;font-weight:700">${title(ri)}</span><span class="xs muted">${ri.product_id ? esc(meta(ri)) : esc(m.shapeName(ri.shape_id) + ' · ' + m.patternName(ri.pattern_id))}</span>${ri.note ? `<span class="xs muted">${esc(ri.note)}</span>` : ''}</div><span class="qty">ждёт ${m.remaining(ri)}</span></div>
     <div class="grid3" style="gap:6px"><button class="btn primary" style="height:44px;border-radius:12px;font-size:13px" data-buy="${ri.id}">Купил</button><button class="btn soft" style="height:44px;border-radius:12px;font-size:13px" data-edit="${ri.id}">Изменить</button><button class="btn" style="height:44px;border-radius:12px;font-size:13px;line-height:1.15" data-wd="${ri.id}">Снять с<br>ожидания</button></div></div>`;
   const wdCard = ri => `<div class="card" style="padding:10px 12px;gap:6px;border-radius:14px;background:#FBFAF7">
@@ -376,9 +420,11 @@ export function request(ctx, [id]) {
     ${r.note ? `<div class="card tight"><span class="xs b muted">ЗАМЕТКИ</span><span class="small" style="white-space:pre-wrap">${esc(r.note)}</span></div>` : ''}
     <span class="label">Ждёт</span>
     ${waiting.length ? waiting.map(waitCard).join('') : '<span class="small muted">Ничего не ждёт</span>'}
+    ${waiting.some(ri => m.isWhole(ri)) ? `<div class="note violet">${icon.split.replace('width="20" height="20"', 'width="16" height="16"')}<span><span class="b">Не дождался целиком?</span> «Разбить на состав» превратит позицию в предметы комплекта. Дата записи ${fmtDate(waiting.find(ri => m.isWhole(ri)).created_at)} и место в очереди сохранятся.</span></div>` : ''}
     ${bought.length ? `<span class="label">Куплено полностью</span><div class="list">${bought.map(ri => `<div class="li"><span class="small">${esc(m.itemLabel(ri))} · ${ri.qty_needed} шт</span><button class="linkbtn xs" data-edit="${ri.id}">Изменить</button></div>`).join('')}</div>` : ''}
-    ${collected ? `<span class="label">Уже собрано</span>${collected}` : ''}
+    <span class="label">Уже собрано</span>${collected || '<div class="card tight small muted">Пока ничего</div>'}
     ${withdrawn.length ? `<span class="label">Снято с ожидания</span>${withdrawn.map(wdCard).join('')}` : ''}
+    ${splitDone.length ? `<span class="label">Разбито на состав</span>${splitDone.map(ri => `<div class="card" style="padding:10px 12px;gap:6px;border-radius:14px;background:#FBFAF7"><div class="between"><span style="font-size:14px;font-weight:700">${esc(m.itemLabel(ri))} · ${ri.qty_needed} шт</span><span class="xs muted">${fmtShort(ri.closed_at)}</span></div><span class="xs muted">Предметы комплекта уже в ожидании${m.bought(ri.id) ? ` · куплено целиком ${m.bought(ri.id)} шт` : ''}. Вернуть нельзя, можно только удалить.</span><button class="btn danger" style="height:40px;border-radius:12px;font-size:13px;border-color:#F0C7C2;color:#B42318" data-del="${ri.id}">Удалить навсегда</button></div>`).join('')}` : ''}
     <div class="grid2" style="margin-top:8px"><button class="btn" id="rem">Напоминание</button><button class="btn" id="note">Заметка</button></div>
     ${r.status === 'active' ? '<button class="btn" id="wdall">Снять весь запрос с ожидания</button>'
       : `<button class="btn soft" id="reopen">Вернуть запрос в ожидание</button><button class="btn danger" id="delreq" style="border-color:#F0C7C2;color:#B42318">Удалить запрос навсегда</button>`}
@@ -390,6 +436,7 @@ export function request(ctx, [id]) {
       on('[data-buy]', el => buySheet(ctx, Number(el.dataset.buy)));
       on('[data-edit]', el => editItemSheet(ctx, Number(el.dataset.edit)));
       on('[data-wd]', el => withdrawSheet(ctx, { riId: Number(el.dataset.wd) }));
+      on('[data-split]', el => splitSheet(ctx, Number(el.dataset.split)));
       on('[data-back-item]', async el => { m.reopenItem(Number(el.dataset.backItem)); await ctx.save('Позиция снова ждёт'); ctx.refresh(); });
       on('[data-del]', async el => {
         const ri = db.get('request_item', Number(el.dataset.del));
@@ -411,6 +458,45 @@ export function request(ctx, [id]) {
       });
     },
   };
+}
+
+/** «Разбить на состав» (эскиз 18) */
+export function splitSheet(ctx, riId) {
+  const { m, db } = ctx;
+  const ri = db.get('request_item', riId);
+  const r = db.get('request', ri.request_id);
+  const c = db.get('client', r.client_id);
+  const rem = m.remaining(ri);
+  const prev = m.splitPreview(ri.id);
+  const keep = new Set(prev.map(x => x.product.id));
+  const bp = m.product(ri.product_id);
+  sheet(`<h1 class="h-screen">Разбить на состав</h1><span class="small muted" style="margin-top:-10px;line-height:1.4">${esc(m.short(bp))} · ждёт ${rem}<br>${esc(c.name)} · запись от ${fmtDate(ri.created_at)}</span>
+    <span class="small b muted">Вместо комплекта клиент будет ждать — снимите галочку с того, что уже есть</span>
+    <div class="col" style="gap:8px" id="list">${prev.map(x => `<button type="button" class="card tight" style="flex-direction:row;align-items:center;gap:12px;text-align:left" data-pid="${x.product.id}"><span class="check on">${icon.check}</span><span class="col grow" style="gap:1px"><span class="b" style="font-size:15px">${esc(m.short(x.product))}</span><span class="xs muted">${x.product.article ? esc(x.product.article) + ' · ' : ''}${x.product.sold_separately ? (x.price != null ? rub(x.price) + ' на ' + fmtShort(ri.created_at) : 'цены нет') : 'только в составе'}</span></span><span class="qty" data-q>${x.qty} шт</span></button>`).join('')}</div>
+    <div class="inset small" style="line-height:1.4" id="sum"></div>
+    <div class="grid2"><button class="btn" id="no">Отмена</button><button class="btn" id="ok" style="background:var(--violet);color:#fff;border:none;font-weight:800">Разбить</button></div>`, (el, close) => {
+    const draw = () => {
+      el.querySelectorAll('[data-pid]').forEach(b => {
+        const on = keep.has(Number(b.dataset.pid));
+        b.querySelector('.check').className = 'check' + (on ? ' on' : '');
+        b.querySelector('.check').innerHTML = on ? icon.check : '';
+        b.style.opacity = on ? '' : '.6';
+        b.querySelector('.b').style.textDecoration = on ? '' : 'line-through';
+        b.querySelector('[data-q]').textContent = on ? `${prev.find(x => x.product.id === Number(b.dataset.pid)).qty} шт` : 'уже есть';
+      });
+      const n = prev.filter(x => keep.has(x.product.id)).reduce((s, x) => s + x.qty, 0);
+      const gone = prev.filter(x => !keep.has(x.product.id)).map(x => m.short(x.product));
+      el.querySelector('#sum').innerHTML = `<span><span class="b">Будет ждать ${n} ${plural(n, 'предмет', 'предмета', 'предметов')}.</span> Количество = в составе × ${rem} ${plural(rem, 'комплект', 'комплекта', 'комплектов')}.</span><span>Дата записи ${fmtDate(ri.created_at)} и место в очереди — как у комплекта. Цены — на дату записи.</span>${gone.length ? `<span>${esc(gone.join(', '))} — ${gone.length > 1 ? 'снимутся' : 'снимется'} с причиной «уже есть».</span>` : ''}<span>Комплект уйдёт в архив запроса как «разбито на состав».</span>`;
+      el.querySelector('#ok').disabled = n === 0;
+    };
+    el.querySelectorAll('[data-pid]').forEach(b => b.onclick = () => { const id = Number(b.dataset.pid); keep.has(id) ? keep.delete(id) : keep.add(id); draw(); });
+    el.querySelector('#no').onclick = close;
+    el.querySelector('#ok').onclick = async () => {
+      try { m.split(ri.id, prev.filter(x => !keep.has(x.product.id)).map(x => x.product.id)); } catch (e) { toast(e.message); return; }
+      await ctx.save('Разбито на состав'); close(); ctx.refresh();
+    };
+    draw();
+  });
 }
 
 const itemCtx = (ctx, ri) => {
@@ -495,7 +581,7 @@ export function addToList(ctx, [pid], query) {
   const { db, m } = ctx;
   const p = m.product(pid);
   if (!p) return { html: `${top({ title: 'Товар не найден' })}` };
-  const st = ctx.state.add?.pid === p.id ? ctx.state.add : (ctx.state.add = { pid: p.id, cid: query.c ? Number(query.c) : null, qty: 1, target: null });
+  const st = ctx.state.add?.pid === p.id ? ctx.state.add : (ctx.state.add = { pid: p.id, cid: query.c ? Number(query.c) : null, qty: 1, target: null, mode: 'parts' });
   if (query.c) st.cid = Number(query.c);
   const c = st.cid ? db.get('client', st.cid) : null;
   const price = m.currentPrice(p.id);
@@ -512,25 +598,27 @@ export function addToList(ctx, [pid], query) {
   const html = `${top({ title: 'Записать клиента' })}
   <div class="content" style="gap:14px">
     <a class="card tight" href="#/product/${p.id}" style="gap:2px"><span style="font-size:16px;font-weight:800;line-height:1.3">${esc(m.short(p))}${m.shapePattern(p) ? ', ' + esc(m.shapePattern(p).replace(' · ', ', ')) : ''}</span><span class="xs b muted">${p.article ? 'арт. ' + esc(p.article) : 'без артикула'}${price != null ? ' · сейчас ' + rub(price) : ''}</span>
-      ${isB ? `<span class="xs muted">Это комплект: в лист ожидания попадут ${leaves.map(l => `${esc((m.kindName(l.product.kind_id) || m.short(l.product)).toLowerCase())} × ${l.qty}`).join(', ')}</span>` : ''}</a>
+      ${isB && st.mode === 'parts' ? `<span class="xs muted">По частям: в лист ожидания попадут ${leaves.map(l => `${esc((m.kindName(l.product.kind_id) || m.short(l.product)).toLowerCase())} × ${l.qty}`).join(', ')}</span>` : ''}${isB && st.mode === 'whole' ? '<span class="xs muted">Целиком: одна позиция — сам комплект</span>' : ''}</a>
+    ${isB ? modeToggle(st.mode) : ''}
     <div class="col" style="gap:6px"><span class="fl">Клиент</span>
       ${c ? `<div class="card tight sel" style="flex-direction:row;align-items:center;gap:10px"><span class="col grow" style="gap:1px"><span style="font-size:15px;font-weight:700">${esc(c.name)}</span><span class="xs muted">${esc(c.phone || 'без телефона')}</span></span><button class="btn sm soft" id="pick">Сменить</button></div>`
         : `<button class="btn primary" id="pick">Выбрать клиента</button>`}
       <button class="linkbtn" id="newc">${icon.plus}Новый клиент</button></div>
     <div class="between" style="align-items:center;padding:10px 14px;background:var(--card);border:1px solid var(--line);border-radius:14px"><span style="font-size:15px;font-weight:700">Сколько нужно${isB ? '<br><span class="xs muted" style="font-weight:500">комплектов</span>' : ''}</span>${stepperHTML('q', st.qty, 1, 99)}</div>
     ${c ? `<div class="col" style="gap:8px"><span class="fl">Куда добавить</span>${targets.map(t => `<button class="card tight" style="flex-direction:row;align-items:flex-start;gap:12px;text-align:left;${st.target === t.id ? 'border:2px solid var(--blue);background:var(--blue-soft)' : ''}" data-t="${t.id}"><span style="width:22px;height:22px;border-radius:11px;border:2px solid ${st.target === t.id ? 'var(--blue)' : '#B8B2A7'};display:flex;align-items:center;justify-content:center;flex-shrink:0">${st.target === t.id ? '<span style="width:10px;height:10px;border-radius:5px;background:var(--blue)"></span>' : ''}</span><span class="col" style="gap:2px"><span style="font-size:15px;font-weight:700;line-height:1.3">${esc(t.title)}</span><span class="xs muted" style="line-height:1.35">${esc(t.sub)}</span></span></button>`).join('')}</div>` : ''}
-    <span class="note blue">${price != null && !isB ? `Запомнятся цена ${rub(price)} и дата ${fmtDate(todayISO())}.` : `Запомнится дата ${fmtDate(todayISO())}${isB ? ' и цены предметов, если они есть' : ''}.`} Место в очереди — по этой дате.</span>
+    <span class="note blue">${price != null && (!isB || st.mode === 'whole') ? `Запомнятся цена ${rub(price)} и дата ${fmtDate(todayISO())}.` : `Запомнится дата ${fmtDate(todayISO())}${isB ? ' и цены предметов, если они есть' : ''}.`} Место в очереди — по этой дате.</span>
     <button class="btn primary big" id="ok" ${c ? '' : 'disabled'}>Записать в лист ожидания</button>
   </div>`;
   return {
     html,
     bind(root) {
       bindSteppers(root, (_, n) => { st.qty = n; });
+      root.querySelectorAll('[data-mode]').forEach(b => b.onclick = () => { st.mode = b.dataset.mode; ctx.refresh(); });
       root.querySelector('#pick').onclick = async () => { const { pickClientSheet } = await import('./screens-products.js'); pickClientSheet(ctx, cid => { st.cid = cid; st.target = null; ctx.refresh(); }); };
       root.querySelector('#newc').onclick = () => newClientSheet(ctx, cl => { st.cid = cl.id; st.target = null; ctx.refresh(); });
       root.querySelectorAll('[data-t]').forEach(b => b.onclick = () => { st.target = b.dataset.t === 'loose' ? 'loose' : Number(b.dataset.t); ctx.refresh(); });
       root.querySelector('#ok').onclick = async () => {
-        const res = m.addToList(c.id, p.id, st.qty, st.target === 'loose' ? null : st.target);
+        const res = m.addToList(c.id, p.id, st.qty, st.target === 'loose' ? null : st.target, { whole: isB && st.mode === 'whole' });
         ctx.state.add = null;
         await ctx.save('Записано в лист ожидания');
         location.replace('#/request/' + res.request.id);

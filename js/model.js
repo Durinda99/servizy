@@ -19,6 +19,13 @@ export class Model {
     for (const p of this.db.all('product_price')) if (p.product_id === pid && p.valid_from <= onDate && (!best || p.valid_from > best.valid_from)) best = p;
     return best?.price_kop ?? null;
   }
+  /** Цена на дату записи, а если на ту дату цены нет — первая известная (схема 4.6) */
+  priceAt(pid, date) {
+    const on = this.currentPrice(pid, date.slice(0, 10));
+    if (on != null) return on;
+    const first = this.prices(pid).at(-1);
+    return first?.price_kop ?? null;
+  }
   bundleItems(bid) {
     return this.db.all('bundle_item').filter(b => b.bundle_id === bid)
       .map(b => ({ ...b, product: this.product(b.product_id) }))
@@ -83,12 +90,14 @@ export class Model {
   }
 
   // ---------- запросы и остатки ----------
+  /** Позиция «комплект целиком»: товар позиции — комплект с составом */
+  isWhole(ri) { return !!ri?.product_id && this.isBundle(ri.product_id); }
   purchasesOf(riId) { return this.db.all('purchase').filter(p => p.request_item_id === riId); }
   bought(riId) { return this.purchasesOf(riId).reduce((s, p) => s + p.qty, 0); }
   remaining(ri) { return Math.max(0, ri.qty_needed - this.bought(ri.id)); }
   requestItems(rid) { return this.db.all('request_item').filter(i => i.request_id === rid).sort((a, b) => a.id - b.id); }
   itemLabel(ri) {
-    if (ri.product_id) return this.short(this.product(ri.product_id));
+    if (ri.product_id) return this.short(this.product(ri.product_id)) + (this.isWhole(ri) ? ' целиком' : '');
     return `${this.kindName(ri.kind_id)} · ${this.shapeName(ri.shape_id)} · ${this.patternName(ri.pattern_id)}`;
   }
   requestProgress(rid) {
@@ -96,7 +105,7 @@ export class Model {
     for (const ri of this.requestItems(rid)) {
       const b = this.bought(ri.id);
       got += b;
-      if (ri.status === 'withdrawn') { need += b; continue; }
+      if (ri.status === 'withdrawn' || ri.status === 'split') { need += b; continue; }
       need += ri.qty_needed;
       if (ri.status === 'waiting') waiting += Math.max(0, ri.qty_needed - b);
     }
@@ -105,7 +114,11 @@ export class Model {
   clientRequests(cid) { return this.db.all('request').filter(r => r.client_id === cid).sort((a, b) => b.created_at.localeCompare(a.created_at)); }
   /** Название запроса: комплект или «Отдельные товары» */
   requestTitle(r) { return r.kind === 'loose' ? 'Отдельные товары' : this.short(this.product(r.bundle_id)); }
-  requestSub(r) { return r.kind === 'loose' ? 'запрос без комплекта' : this.shapePattern(this.product(r.bundle_id) || {}); }
+  requestSub(r) {
+    if (r.kind === 'loose') return 'запрос без комплекта';
+    const whole = this.requestItems(r.id).some(i => i.status === 'waiting' && i.product_id === r.bundle_id && this.isWhole(i));
+    return [this.shapePattern(this.product(r.bundle_id) || {}), whole ? 'ждёт целиком' : null].filter(Boolean).join(' · ');
+  }
   looseRequest(cid) { return this.db.all('request').find(r => r.client_id === cid && r.kind === 'loose' && r.status === 'active') || null; }
 
   /** Сколько клиентов ждут и сколько предметов в листе ожидания */
@@ -139,36 +152,59 @@ export class Model {
       any,
       count: pid => {
         if (!any) return 0;
-        const hit = this.leaves(pid).some(l => byProduct.has(l.product.id) || byCrit.has(`${l.product.kind_id}|${l.product.shape_id}|${l.product.pattern_id}`));
+        const hit = byProduct.has(pid) || this.leaves(pid).some(l => byProduct.has(l.product.id) || byCrit.has(`${l.product.kind_id}|${l.product.shape_id}|${l.product.pattern_id}`));
         return hit ? new Set(this.queue([pid]).map(g => g.client.id)).size : 0;
       },
     };
   }
 
-  /** Очередь по поступившему товару (схема 4.1): группы «запрос клиента» по дате записи */
+  /**
+   * Очередь по поступившему товару (схема 4.1): группы «запрос клиента» по дате записи.
+   * Пришёл комплект — ищем и ждущих его целиком, и ждущих его предметы.
+   * Пришёл предмет комплекта, а клиент ждёт этот комплект целиком — группа с hint: в конце списка.
+   */
   queue(pids) {
     const groups = new Map();
     const items = this.db.all('request_item').filter(ri => ri.status === 'waiting');
+    const ok = ri => {
+      const r = this.db.get('request', ri.request_id);
+      if (!r || r.status !== 'active') return null;
+      const c = this.db.get('client', r.client_id);
+      if (!c || c.is_archived) return null;
+      return { r, c };
+    };
+    const add = (key, pid, rc, ri, leaf, hint) => {
+      const rem = this.remaining(ri);
+      if (rem <= 0) return;
+      if (!groups.has(key)) groups.set(key, { arrival: pid, request: rc.r, client: rc.c, bundle: rc.r.bundle_id ? this.product(rc.r.bundle_id) : null, items: [], since: ri.created_at, hint });
+      const g = groups.get(key);
+      if (g.items.some(x => x.ri.id === ri.id)) return;
+      g.items.push({ ri, leaf, remaining: rem, bought: this.bought(ri.id), similar: !ri.product_id, whole: this.isWhole(ri) });
+      if (ri.created_at < g.since) g.since = ri.created_at;
+    };
     for (const pid of pids) {
+      const self = this.product(pid);
+      if (!self) continue;
       const leaves = this.leaves(pid);
+      const cands = leaves.some(l => l.product.id === pid) ? leaves : [{ product: self, qty: 1 }, ...leaves];
+      const leafIds = new Set(cands.map(l => l.product.id));
       for (const ri of items) {
-        const leaf = leaves.find(l => ri.product_id ? ri.product_id === l.product.id
+        const leaf = cands.find(l => ri.product_id ? ri.product_id === l.product.id
           : l.product.kind_id && ri.kind_id === l.product.kind_id && ri.shape_id === l.product.shape_id && ri.pattern_id === l.product.pattern_id);
-        if (!leaf) continue;
-        const r = this.db.get('request', ri.request_id);
-        if (!r || r.status !== 'active') continue;
-        const c = this.db.get('client', r.client_id);
-        if (!c || c.is_archived) continue;
-        const rem = this.remaining(ri);
-        if (rem <= 0) continue;
-        const key = `${pid}|${r.id}`;
-        if (!groups.has(key)) groups.set(key, { arrival: pid, request: r, client: c, bundle: r.bundle_id ? this.product(r.bundle_id) : null, items: [], since: ri.created_at });
-        const g = groups.get(key);
-        g.items.push({ ri, leaf, remaining: rem, bought: this.bought(ri.id), similar: !ri.product_id });
-        if (ri.created_at < g.since) g.since = ri.created_at;
+        if (leaf) { const rc = ok(ri); if (rc) add(`${pid}|${rc.r.id}`, pid, rc, ri, leaf, false); continue; }
+        // подсказка «ждёт комплект целиком»
+        if (ri.product_id && !leafIds.has(ri.product_id) && this.isWhole(ri)
+          && this.bundleItems(ri.product_id).some(b => leafIds.has(b.product_id))) {
+          const rc = ok(ri);
+          if (rc) add(`${pid}|${rc.r.id}|hint`, pid, rc, ri, { product: this.product(ri.product_id), qty: 1 }, true);
+        }
       }
     }
-    return [...groups.values()].sort((a, b) => a.since.localeCompare(b.since));
+    const all = [...groups.values()];
+    // если клиент уже есть в основном списке по этому же запросу, подсказку не дублируем
+    const main = all.filter(g => !g.hint).sort((a, b) => a.since.localeCompare(b.since));
+    const hints = all.filter(g => g.hint && !main.some(x => x.arrival === g.arrival && x.request.id === g.request.id)).sort((a, b) => a.since.localeCompare(b.since));
+    return [...main, ...hints];
   }
 
   // ---------- действия (вызывающий делает db.commit) ----------
@@ -179,9 +215,10 @@ export class Model {
     return this.db.put('request_item', { request_id: rid, product_id: product.id, kind_id: null, shape_id: null, pattern_id: null, qty_needed: qty, price_kop: this.currentPrice(product.id), status: 'waiting', withdraw_reason: null, created_at: now, updated_at: null, closed_at: null, note: null });
   }
   /** Запрос на комплект. lines: [{ product_id, qty, full }] — qty 0 означает «уже есть» */
-  createRequest(clientId, bundleId, lines, similar = [], note = null) {
+  createRequest(clientId, bundleId, lines, similar = [], note = null, { whole = 0 } = {}) {
     const now = nowISO();
     const r = this.db.put('request', { client_id: clientId, kind: 'bundle', bundle_id: bundleId, status: 'active', withdraw_reason: null, created_at: now, closed_at: null, note });
+    if (whole > 0) { this.newItem(r.id, this.product(bundleId), whole, now); return r; }
     for (const l of lines) {
       const p = this.product(l.product_id);
       if (!p || p.is_packaging) continue;
@@ -206,13 +243,14 @@ export class Model {
     });
   }
   /** «Записать клиента» на товар: в выбранный запрос или в «Отдельные товары». Комплект раскладывается на предметы. */
-  addToList(cid, pid, qty, requestId = null) {
+  addToList(cid, pid, qty, requestId = null, { whole = false } = {}) {
     const now = nowISO();
     let r = requestId ? this.db.get('request', requestId) : this.looseRequest(cid);
     if (!r) r = this.db.put('request', { client_id: cid, kind: 'loose', bundle_id: null, status: 'active', withdraw_reason: null, created_at: now, closed_at: null, note: null });
     else if (r.status !== 'active') r = this.db.put('request', { ...r, status: 'active', closed_at: null, withdraw_reason: null });
     const added = [];
-    for (const l of this.leaves(pid)) if (!l.product.is_packaging) added.push(this.newItem(r.id, l.product, qty * l.qty, now));
+    if (whole && this.isBundle(pid)) added.push(this.newItem(r.id, this.product(pid), qty, now));
+    else for (const l of this.leaves(pid)) if (!l.product.is_packaging) added.push(this.newItem(r.id, l.product, qty * l.qty, now));
     return { request: r, added };
   }
   addSimilar(rid, { kind_id, shape_id, pattern_id, qty, note }, now = nowISO()) {
@@ -241,6 +279,27 @@ export class Model {
     this.db.put('request_item', rec);
     if (rec.status === 'waiting') this.activate(ri.request_id); else this.closeIfDone(ri.request_id);
   }
+  /** Что получится при «Разбить на состав»: предметы × сколько комплектов ещё ждёт клиент */
+  splitPreview(riId) {
+    const ri = this.db.get('request_item', riId);
+    const rem = this.remaining(ri);
+    return this.bundleItems(ri.product_id).filter(b => !b.product.is_packaging)
+      .map(b => ({ product: b.product, qty: b.quantity * rem, price: this.priceAt(b.product_id, ri.created_at) }));
+  }
+  /** «Разбить на состав» (схема 4.6). have — id товаров, которые у клиента уже есть */
+  split(riId, have = []) {
+    const ri = this.db.get('request_item', riId);
+    if (!ri || ri.status !== 'waiting' || !this.isWhole(ri)) throw new Error('Разбить на состав можно только ждущий комплект целиком');
+    const now = nowISO();
+    for (const x of this.splitPreview(riId)) {
+      if (x.qty <= 0) continue;
+      const rec = { request_id: ri.request_id, product_id: x.product.id, kind_id: null, shape_id: null, pattern_id: null, qty_needed: x.qty, price_kop: x.price, status: 'waiting', withdraw_reason: null, split_from_id: ri.id, created_at: ri.created_at, updated_at: null, closed_at: null, note: null };
+      if (have.includes(x.product.id)) Object.assign(rec, { status: 'withdrawn', withdraw_reason: 'уже есть', closed_at: now });
+      this.db.put('request_item', rec);
+    }
+    this.db.put('request_item', { ...ri, status: 'split', closed_at: now });
+    this.closeIfDone(ri.request_id);
+  }
   /** «Снять с ожидания» с причиной */
   withdraw(riId, reason) {
     const ri = this.db.get('request_item', riId);
@@ -251,7 +310,7 @@ export class Model {
   /** «Вернуть в ожидание»: прежние дата записи, цена и место в очереди */
   reopenItem(riId) {
     const ri = this.db.get('request_item', riId);
-    if (!ri) return;
+    if (!ri || ri.status === 'split') return;
     this.db.put('request_item', { ...ri, status: 'waiting', withdraw_reason: null, closed_at: null, with_request: 0 });
     this.activate(ri.request_id);
   }
@@ -293,6 +352,7 @@ export class Model {
     if (ri.status === 'waiting' && r?.status === 'active') throw new Error('Сначала снимите позицию с ожидания');
     for (const p of this.purchasesOf(riId)) this.db.del('purchase', p.id);
     for (const rem of this.db.all('reminder').filter(x => x.request_item_id === riId)) this.db.del('reminder', rem.id);
+    for (const ch of this.db.all('request_item').filter(x => x.split_from_id === riId)) this.db.put('request_item', { ...ch, split_from_id: null });
     this.db.del('request_item', riId);
   }
   deleteRequest(rid) {

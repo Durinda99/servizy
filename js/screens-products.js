@@ -144,8 +144,15 @@ function priceLine(m, it) {
   if (it.ri.price_kop == null) return `сейчас ${rub(now)}`;
   return `при записи ${rub(it.ri.price_kop)}${now != null ? ` · сейчас ${rub(now)}` : ''}`;
 }
+function hintCard(ctx, g) {
+  const { m } = ctx;
+  const it = g.items[0];
+  return `<a class="card tap" href="#/request/${g.request.id}" style="flex-direction:row;align-items:center;gap:10px;border:1.5px dashed #C9B6E0;background:var(--violet-soft);padding:12px 14px">
+    <span class="col grow" style="gap:2px"><span class="xs b" style="color:var(--violet)">ЖДЁТ КОМПЛЕКТ ЦЕЛИКОМ</span><span style="font-size:16px;font-weight:700;color:var(--ink)">${esc(g.client.name)}</span><span class="small muted">${esc(m.short(it.leaf.product))} × ${it.remaining} · с ${fmtDate(it.ri.created_at)} · предложить по частям?</span></span>${icon.chev}</a>`;
+}
 function groupCard(ctx, g, idx, shown = idx) {
   const { m } = ctx;
+  if (g.hint) return hintCard(ctx, g);
   const sim = g.items.filter(i => i.similar);
   return `<div class="card" style="gap:10px">
     <a class="row" style="gap:8px;color:var(--ink)" href="#/client/${g.client.id}"><span class="num">${shown + 1}</span><span style="font-size:16px;font-weight:700">${esc(g.client.name)}</span></a>
@@ -153,7 +160,7 @@ function groupCard(ctx, g, idx, shown = idx) {
       ${sim.length && sim.length === g.items.length ? `<span class="b" style="color:var(--violet)">Что-то подобное:</span> ${esc(m.itemLabel(sim[0].ri).toLowerCase())}<br>` : ''}
       <a href="#/request/${g.request.id}" style="color:var(--muted)">${esc(g.bundle ? m.short(g.bundle) + (g.bundle.pattern_id ? ' «' + m.patternName(g.bundle.pattern_id) + '»' : '') : m.requestTitle(g.request))}</a> · запись от ${fmtDate(g.since)}
     </div>
-    <div class="inset">${g.items.map(it => `<div class="between" style="font-size:14px;align-items:flex-start"><span class="col" style="gap:1px"><span class="b">${esc(it.similar ? m.kindName(it.ri.kind_id) : m.short(it.leaf.product))}${it.bought ? ` <span class="muted" style="font-weight:500">${it.bought} из ${it.ri.qty_needed} куплены</span>` : ''}</span><span class="xs muted">${esc(priceLine(m, it))}</span></span><span class="qty">${it.remaining} шт</span></div>`).join('')}</div>
+    <div class="inset">${g.items.map(it => `<div class="between" style="font-size:14px;align-items:flex-start"><span class="col" style="gap:1px"><span class="b">${esc(it.similar ? m.kindName(it.ri.kind_id) : m.short(it.leaf.product) + (it.whole ? ' целиком' : ''))}${it.bought ? ` <span class="muted" style="font-weight:500">${it.bought} из ${it.ri.qty_needed} куплены</span>` : ''}</span><span class="xs muted">${esc(priceLine(m, it))}</span></span><span class="qty">${it.remaining} шт</span></div>`).join('')}</div>
     <div class="grid3">${phoneBtns(g.client)}<button class="btn" style="height:44px;border-radius:12px;font-size:14px" data-mark="${idx}">Отметить</button></div>
   </div>`;
 }
@@ -173,14 +180,16 @@ export function queue(ctx, [ids]) {
     const items = m.bundleItems(pid).filter(b => !b.product.is_packaging);
     if (!items.length) return '';
     const txt = items.slice(0, 6).map(b => `${b.quantity} ${esc((m.kindName(b.product.kind_id) || m.short(b.product)).toLowerCase())}`).join(' + ') + (items.length > 6 ? ' и др.' : '');
-    return `<div class="note violet">${icon.split}<span><span class="b">Это комплект:</span> ${txt}. Ищем, кому не хватает этих предметов.</span></div>`;
+    return `<div class="note violet">${icon.split}<span><span class="b">Это комплект:</span> ${txt}. Ищем ждущих его целиком и тех, кому не хватает этих предметов.</span></div>`;
   };
   let body = '';
   let idx = 0;
   const all = [];
   if (one) {
     body += leavesNote(one.id);
-    body += `<div class="between"><h1 class="h-screen">${groups.length ? `${plural(groups.length, 'Ждёт', 'Ждут', 'Ждут')} ${groups.length} ${plural(groups.length, 'клиент', 'клиента', 'клиентов')}` : 'Никто не ждёт'}</h1>${groups.length ? '<span class="xs b muted">по дате записи ↑</span>' : ''}</div>`;
+    const mainN = new Set(groups.filter(g => !g.hint).map(g => g.client.id)).size;
+    body += `<div class="between"><h1 class="h-screen">${mainN ? `${plural(mainN, 'Ждёт', 'Ждут', 'Ждут')} ${mainN} ${plural(mainN, 'клиент', 'клиента', 'клиентов')}` : 'Никто не ждёт'}</h1>${mainN ? '<span class="xs b muted">по дате записи ↑</span>' : ''}</div>`;
+    if (!mainN && groups.length) body += '<span class="small muted">Но есть клиенты, которые ждут комплект с этим предметом целиком:</span>';
     if (!groups.length) body += `<div class="empty">Этот товар сейчас никому не нужен.<br><a href="#/product/${one.id}">Открыть карточку товара</a></div>`;
     for (const g of groups) { body += groupCard(ctx, g, idx++); all.push(g); }
   } else {
@@ -206,7 +215,7 @@ function afterCallSheet(ctx, g) {
   const arrival = m.product(g.arrival);
   const multi = g.items.length > 1;
   const unitMax = Math.max(...g.items.map(it => Math.ceil(it.remaining / it.leaf.qty)));
-  const nm = it => (it.similar ? m.kindName(it.ri.kind_id) : m.short(it.leaf.product));
+  const nm = it => (it.similar ? m.kindName(it.ri.kind_id) : m.short(it.leaf.product) + (it.whole ? ' целиком' : ''));
   const waits = g.items.map(it => `${esc(nm(it).toLowerCase())} — ${it.remaining} шт`).join(', ');
   const html = `<div class="col"><h1 class="h-screen">${esc(g.client.name)}</h1><span class="small muted" style="line-height:1.4">Пришёл товар «${esc(m.short(arrival))}»${arrival.article ? ' · ' + esc(arrival.article) : ''}<br>Ждёт: ${waits}<br>для «${esc(g.bundle ? m.short(g.bundle) : m.requestTitle(g.request))}»</span></div>
     <div class="col" style="gap:8px"><span class="fl">Чем закончился разговор</span>
@@ -291,7 +300,7 @@ export function product(ctx, [id]) {
     </div>
     ${isB ? `<div class="between"><span class="label">Состоит из</span><button class="linkbtn small" id="comp">Изменить состав</button></div>
       <div class="list">${items.map(i => `<a class="li" href="#/product/${i.product.id}"><span class="col" style="gap:1px"><span style="font-size:14px;${i.product.is_packaging ? 'color:var(--muted)' : ''}">${esc(m.short(i.product))}</span><span class="xs muted">${i.product.article ? esc(i.product.article) : 'без артикула'}${i.product.is_packaging ? ' · упаковка' : ''}</span></span><span class="b nowrap">× ${i.quantity}</span></a>`).join('')}</div>
-      <button class="btn soft" id="enroll">Клиент собирает весь комплект</button>` : ''}
+      <button class="btn soft" id="enroll">Записать клиента на весь комплект (целиком или по частям)</button>` : ''}
     ${inB.length ? `<span class="label">Входит в комплекты</span><div class="list">${inB.map(b => `<a class="li" href="#/product/${b.bundle.id}"><span style="font-size:14px">${esc(b.bundle.name)}</span><span class="b nowrap">× ${b.quantity}</span></a>`).join('')}</div>` : ''}
     ${!isB && !p.is_packaging ? `<button class="btn soft" id="addcomp">Сделать комплектом (задать состав)</button>` : ''}
   </div>`;
