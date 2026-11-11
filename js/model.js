@@ -120,6 +120,10 @@ export class Model {
     return [this.shapePattern(this.product(r.bundle_id) || {}), whole ? 'ждёт целиком' : null].filter(Boolean).join(' · ');
   }
   looseRequest(cid) { return this.db.all('request').find(r => r.client_id === cid && r.kind === 'loose' && r.status === 'active') || null; }
+  /** Активный запрос клиента именно на этот комплект (самый новый) */
+  bundleRequest(cid, bundleId) {
+    return this.clientRequests(cid).find(r => r.status === 'active' && r.kind === 'bundle' && r.bundle_id === bundleId) || null;
+  }
 
   /** Сколько клиентов ждут и сколько предметов в листе ожидания */
   stats() {
@@ -242,10 +246,16 @@ export class Model {
       return b && p.shape_id && b.shape_id === p.shape_id && b.pattern_id === p.pattern_id;
     });
   }
-  /** «Записать клиента» на товар: в выбранный запрос или в «Отдельные товары». Комплект раскладывается на предметы. */
-  addToList(cid, pid, qty, requestId = null, { whole = false } = {}) {
+  /**
+   * «Записать клиента» на товар: в выбранный запрос, в «Отдельные товары» или, если товар — комплект и
+   * newBundle = true, в новый запрос на этот комплект (в названии запроса — название комплекта).
+   * Комплект «по частям» раскладывается на предметы, «целиком» — одна позиция.
+   */
+  addToList(cid, pid, qty, requestId = null, { whole = false, newBundle = false } = {}) {
     const now = nowISO();
-    let r = requestId ? this.db.get('request', requestId) : this.looseRequest(cid);
+    let r;
+    if (newBundle && this.isBundle(pid)) r = this.db.put('request', { client_id: cid, kind: 'bundle', bundle_id: pid, status: 'active', withdraw_reason: null, created_at: now, closed_at: null, note: null });
+    else r = requestId ? this.db.get('request', requestId) : this.looseRequest(cid);
     if (!r) r = this.db.put('request', { client_id: cid, kind: 'loose', bundle_id: null, status: 'active', withdraw_reason: null, created_at: now, closed_at: null, note: null });
     else if (r.status !== 'active') r = this.db.put('request', { ...r, status: 'active', closed_at: null, withdraw_reason: null });
     const added = [];

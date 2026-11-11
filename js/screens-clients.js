@@ -589,7 +589,11 @@ export function addToList(ctx, [pid], query) {
   const isB = leaves.length > 1 || (leaves[0] && leaves[0].product.id !== p.id);
   let targets = [];
   if (c) {
-    targets = m.matchingRequests(c.id, p.id).map(r => ({ id: r.id, title: m.requestTitle(r), sub: `Подходит: та же форма ${m.shapeName(p.shape_id)} и рисунок ${m.patternName(p.pattern_id)}` }));
+    // Для комплекта: сначала уже начатый запрос на этот же комплект, затем новый запрос на комплект
+    const same = isB ? m.bundleRequest(c.id, p.id) : null;
+    if (same) targets.push({ id: same.id, title: m.requestTitle(same), sub: 'Уже собирает этот комплект' });
+    if (isB) targets.push({ id: 'new', title: `Новый запрос: ${m.short(p)}`, sub: 'Запрос на комплект, называется как комплект' });
+    targets.push(...m.matchingRequests(c.id, p.id).filter(r => r.id !== same?.id).map(r => ({ id: r.id, title: m.requestTitle(r), sub: `Подходит: та же форма ${m.shapeName(p.shape_id)} и рисунок ${m.patternName(p.pattern_id)}` })));
     const loose = m.looseRequest(c.id);
     const n = loose ? m.requestItems(loose.id).filter(i => i.status === 'waiting').length : 0;
     targets.push({ id: 'loose', title: 'Отдельные товары', sub: loose ? `Запрос без комплекта · сейчас там ${n} ${plural(n, 'позиция', 'позиции', 'позиций')}` : 'Запрос без комплекта — будет создан' });
@@ -616,9 +620,10 @@ export function addToList(ctx, [pid], query) {
       root.querySelectorAll('[data-mode]').forEach(b => b.onclick = () => { st.mode = b.dataset.mode; ctx.refresh(); });
       root.querySelector('#pick').onclick = async () => { const { pickClientSheet } = await import('./screens-products.js'); pickClientSheet(ctx, cid => { st.cid = cid; st.target = null; ctx.refresh(); }); };
       root.querySelector('#newc').onclick = () => newClientSheet(ctx, cl => { st.cid = cl.id; st.target = null; ctx.refresh(); });
-      root.querySelectorAll('[data-t]').forEach(b => b.onclick = () => { st.target = b.dataset.t === 'loose' ? 'loose' : Number(b.dataset.t); ctx.refresh(); });
+      root.querySelectorAll('[data-t]').forEach(b => b.onclick = () => { st.target = (b.dataset.t === 'loose' || b.dataset.t === 'new') ? b.dataset.t : Number(b.dataset.t); ctx.refresh(); });
       root.querySelector('#ok').onclick = async () => {
-        const res = m.addToList(c.id, p.id, st.qty, st.target === 'loose' ? null : st.target, { whole: isB && st.mode === 'whole' });
+        const toLoose = st.target === 'loose', toNew = st.target === 'new';
+        const res = m.addToList(c.id, p.id, st.qty, (toLoose || toNew) ? null : st.target, { whole: isB && st.mode === 'whole', newBundle: toNew });
         ctx.state.add = null;
         await ctx.save('Записано в лист ожидания');
         location.replace('#/request/' + res.request.id);
