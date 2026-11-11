@@ -28,7 +28,7 @@ export function home(ctx) {
     </div>`;
   };
   const html = `<div class="content home">
-    <div class="col" style="gap:2px"><span class="small b muted">${longToday()}</span><h1 class="h1">Сервизы</h1></div>
+    <div class="col" style="gap:2px"><span class="small b muted">${longToday()}</span><h1 class="h1">Сервизы <span class="small b muted" style="letter-spacing:0">v${esc(ctx.version)}</span></h1></div>
     <a class="search" href="#/search">${icon.search}<span>Артикул или название — кто ждёт?</span></a>
     <div class="col" style="gap:10px">
       <div class="between"><h2 class="h2">Позвонить</h2><span class="small b muted">${due.length ? `${due.length} ${plural(due.length, 'напоминание', 'напоминания', 'напоминаний')}` : ''}</span></div>
