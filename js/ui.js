@@ -30,7 +30,7 @@ export function top({ title = '', back = true, right = '', sub = null }) {
 
 export function nav(active) {
   const it = (href, key, ic, label) => `<a href="${href}" class="${active === key ? 'on' : ''}">${ic}${label}</a>`;
-  return `<nav class="nav">${it('#/', 'home', icon.home, 'Главная')}${it('#/clients', 'clients', icon.people, 'Клиенты')}${it('#/search', 'search', icon.plate, 'Товары')}${it('#/sets', 'sets', icon.layers, 'Комплекты')}${it('#/more', 'more', icon.more, 'Ещё')}</nav>`;
+  return `<nav class="nav">${it('#/', 'home', icon.home, 'Главная')}${it('#/clients', 'clients', icon.people, 'Клиенты')}${it('#/search', 'search', icon.plate, 'Товары')}${it('#/more', 'more', icon.more, 'Ещё')}</nav>`;
 }
 
 export function toast(text, ms = 2600) {

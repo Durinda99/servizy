@@ -65,10 +65,11 @@ export class Model {
   }
   shapePattern(p) { return [this.shapeName(p.shape_id), this.patternName(p.pattern_id)].filter(Boolean).join(' · '); }
 
-  searchProducts(q, { limit = 60, bundlesOnly = false, includePackaging = false, includeArchived = false, sectionId = null } = {}) {
+  searchProducts(q, { limit = 60, bundlesOnly = false, kind = null, includePackaging = false, includeArchived = false, sectionId = null } = {}) {
+    if (bundlesOnly) kind = 'bundles';  // kind: null — все, 'items' — предметы, 'bundles' — комплекты
     const raw = q.trim().toLowerCase().replace(/ё/g, 'е');
     const bundles = this.bundleIds();
-    let list = this.db.all('product').filter(p => (includePackaging || !p.is_packaging) && (includeArchived || !p.is_archived) && (!bundlesOnly || bundles.has(p.id)));
+    let list = this.db.all('product').filter(p => (includePackaging || !p.is_packaging) && (includeArchived || !p.is_archived) && (kind !== 'bundles' || bundles.has(p.id)) && (kind !== 'items' || !bundles.has(p.id)));
     if (sectionId) { const inSec = new Set(this.db.all('product_section').filter(s => s.section_id === sectionId).map(s => s.product_id)); list = list.filter(p => inSec.has(p.id)); }
     if (raw) {
       const artLike = /^[\d.\s]+$/.test(raw);

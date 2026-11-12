@@ -6,7 +6,7 @@ import * as P from './screens-products.js';
 import * as C from './screens-clients.js';
 import * as M from './screens-more.js';
 
-export const APP_VERSION = '1.3.2';
+export const APP_VERSION = '1.4.0';
 
 const routes = [
   [/^\/$/, P.home],

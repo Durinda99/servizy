@@ -50,29 +50,33 @@ export function home(ctx) {
   };
 }
 
-// ================= Поиск товара =================
+// ================= Товары: поиск предметов и комплектов (ТЗ 1.10: один пункт меню) =================
 const addIcon = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="9" cy="8" r="4"/><path d="M2 21a7 7 0 0 1 14 0M19 8v6M16 11h6"/></svg>';
 const SEC_SHORT = { 'Столовые предметы': 'Столовые', 'Чайно-кофейные предметы': 'Чайно-кофейные', 'Сервизы': 'Сервизы' };
 
 export function search(ctx, _p, query) {
   const { m, db } = ctx;
-  const st = ctx.state.search ??= { q: '', multi: false, picked: [], sec: null };
+  const st = ctx.state.search ??= { q: '', multi: false, picked: [], sec: null, kind: null };
+  if (st.kind === undefined) st.kind = null;
+  const KINDS = [[null, 'Все'], ['items', 'Предметы'], ['bundles', 'Комплекты']];
   if (query.q !== undefined) st.q = query.q;
   const secs = db.all('section').sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
   const html = `<header class="top" style="flex-direction:column;align-items:stretch;gap:10px;padding:10px 16px 12px">
-      <div class="row" style="gap:8px"><button class="icon-btn" data-back aria-label="Назад">${icon.back}</button>
+      <div class="row" style="gap:8px">
         <label class="search grow" style="height:52px;border-radius:14px;box-shadow:none;padding:0 14px">${icon.search}<input id="q" type="search" enterkeyhint="search" autocomplete="off" placeholder="Артикул или название" value="${esc(st.q)}" style="font-weight:600"></label></div>
-      <div class="row" style="gap:8px;overflow-x:auto;scrollbar-width:none">${[{ id: null, name: 'Все' }, ...secs].map(s => `<button class="chip ${st.sec === s.id ? 'on' : ''}" style="height:36px;font-size:13px;white-space:nowrap;flex-shrink:0" data-sec="${s.id ?? ''}">${esc(SEC_SHORT[s.name] || s.name)}</button>`).join('')}</div>
+      <div role="group" aria-label="Что искать" style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:4px;padding:4px;background:var(--line2);border-radius:14px">${KINDS.map(([k, label]) => `<button data-kind="${k ?? ''}" aria-pressed="${st.kind === k}" style="height:38px;border-radius:10px;font-size:14px;${st.kind === k ? 'border:1.5px solid var(--blue);background:var(--card);color:var(--ink);font-weight:800' : 'border:none;background:transparent;color:var(--muted);font-weight:600'}">${label}</button>`).join('')}</div>
+      <div class="row" style="gap:8px;overflow-x:auto;scrollbar-width:none">${[{ id: null, name: 'Все разделы' }, ...secs].map(s => `<button class="chip ${st.sec === s.id ? 'on' : ''}" style="height:36px;font-size:13px;white-space:nowrap;flex-shrink:0" data-sec="${s.id ?? ''}">${esc(SEC_SHORT[s.name] || s.name)}</button>`).join('')}</div>
     </header>
     <div class="content" style="gap:10px">
       <span class="small b muted" id="found"></span>
       <div id="res" class="col" style="gap:10px"></div>
       <button class="btn" id="multi" style="border:1.5px dashed var(--blue);background:transparent;color:var(--blue);margin-top:6px">${st.multi ? 'Готово: проверять по одному' : `${icon.plus} Проверить несколько товаров (партию)`}</button>
-      <button class="linkbtn" id="newp" style="justify-content:center;font-weight:600">Нет в каталоге? Добавить товар вручную</button>
-    </div>
+      <span class="xs muted" style="text-align:center;margin-top:4px">Нет в каталоге? Добавьте вручную:</span>
+      <div class="grid2" style="gap:8px"><button class="btn" id="newp" style="padding:0 8px;font-size:14px;gap:6px">${icon.plus}Добавить товар</button><button class="btn" id="newset" style="padding:0 8px;font-size:14px;gap:6px">${icon.plus}Новый комплект</button></div>
+    </div>${st.multi ? '' : nav('search')}
     <div id="multibar" class="nav ${st.multi ? '' : 'hide'}" style="padding:10px 16px calc(12px + env(safe-area-inset-bottom))"><button class="btn primary big grow" id="showq"></button></div>`;
   return {
-    html,
+    html, nav: !st.multi,
     bind(root) {
       const inp = root.querySelector('#q');
       const res = root.querySelector('#res');
@@ -90,16 +94,17 @@ export function search(ctx, _p, query) {
         return [what, price != null ? rub(price) : null].filter(Boolean).join(' · ');
       };
       const draw = () => {
-        const { total, items } = m.searchProducts(st.q, { limit: 50, sectionId: st.sec });
+        const browse = !st.q.trim() && st.kind === 'bundles';  // комплекты видны сразу, без ввода текста
+        const { total, items } = m.searchProducts(st.q, { limit: 50, sectionId: st.sec, kind: st.kind });
         showq.textContent = `Показать, кто ждёт (${st.picked.length})`;
         showq.disabled = !st.picked.length;
         const fnd = root.querySelector('#found');
-        if (!st.q.trim()) {
+        if (!st.q.trim() && !browse) {
           fnd.textContent = '';
           res.innerHTML = `<div class="empty">Введите артикул (например, 81.31631) или часть названия: «чашка саламандра».<br>Нажмите на товар — покажу, кто его ждёт. Кнопка справа — записать клиента на товар.</div>`;
           return;
         }
-        fnd.textContent = `Найдено ${total} ${plural(total, 'товар', 'товара', 'товаров')}${total > items.length ? `, показаны первые ${items.length}` : ''}`;
+        fnd.textContent = (browse ? `Комплектов: ${total}` : `Найдено ${total} ${st.kind === 'bundles' ? plural(total, 'комплект', 'комплекта', 'комплектов') : st.kind === 'items' ? plural(total, 'предмет', 'предмета', 'предметов') : plural(total, 'товар', 'товара', 'товаров')}`) + (total > items.length ? `, показаны первые ${items.length}` : '');
         if (!items.length) { res.innerHTML = `<div class="empty">Ничего не нашлось.</div>`; return; }
         res.innerHTML = items.map(p => {
           const n = wi.count(p.id);
@@ -118,6 +123,7 @@ export function search(ctx, _p, query) {
       let t;
       inp.addEventListener('input', () => { clearTimeout(t); t = setTimeout(() => { st.q = inp.value; draw(); }, 150); });
       inp.addEventListener('keydown', e => { if (e.key === 'Enter') inp.blur(); });
+      root.querySelectorAll('[data-kind]').forEach(b => b.onclick = () => { st.kind = b.dataset.kind || null; ctx.refresh(); });
       root.querySelectorAll('[data-sec]').forEach(b => b.onclick = () => { st.sec = b.dataset.sec ? Number(b.dataset.sec) : null; root.querySelectorAll('[data-sec]').forEach(x => x.classList.toggle('on', x === b)); draw(); });
       res.addEventListener('click', e => {
         const a = e.target.closest('[data-pid]');
@@ -130,8 +136,9 @@ export function search(ctx, _p, query) {
       root.querySelector('#multi').onclick = () => { st.multi = !st.multi; if (!st.multi) st.picked = []; ctx.refresh(); };
       showq.onclick = () => ctx.go('#/queue/' + st.picked.join(','));
       root.querySelector('#newp').onclick = () => productEditSheet(ctx, null);
+      root.querySelector('#newset').onclick = () => productEditSheet(ctx, null, { asBundle: true });
       draw();
-      if (!st.q) setTimeout(() => inp.focus(), 50);
+      if (!st.q && st.kind !== 'bundles') setTimeout(() => inp.focus(), 50);
     },
   };
 }
@@ -434,27 +441,8 @@ export function pickClientSheet(ctx, onPick) {
 }
 
 // ================= Комплекты =================
-export function sets(ctx) {
-  const { m } = ctx;
-  const st = ctx.state.sets ??= { q: '' };
-  const html = `<div class="content" style="gap:10px">
-    <div class="between" style="align-items:center"><h1 class="h1">Комплекты</h1><button class="linkbtn" id="new">${icon.plus}Новый</button></div>
-    <div class="search" style="height:50px;box-shadow:none">${icon.search}<input id="q" type="search" placeholder="Название, рисунок или артикул" value="${esc(st.q)}"></div>
-    <div id="res" class="col" style="gap:8px"></div></div>${nav('sets')}`;
-  return {
-    html, nav: true,
-    bind(root) {
-      const draw = () => {
-        const { total, items } = m.searchProducts(st.q, { limit: 60, bundlesOnly: true });
-        root.querySelector('#res').innerHTML = items.map(p => {
-          const pr = m.currentPrice(p.id);
-          return `<a class="card tight tap" href="#/product/${p.id}"><span style="font-size:15px;font-weight:700;line-height:1.3">${esc(m.short(p))}</span><span class="xs b muted">${esc(m.shapePattern(p))}</span><span class="xs b muted">${p.article ? 'арт. ' + esc(p.article) : ''}${p.persons ? ` · ${p.persons} перс.` : ''}${p.items_count ? ` · ${p.items_count} пр.` : ''}${pr != null ? ' · ' + rub(pr) : ''}</span></a>`;
-        }).join('') + (total > items.length ? `<div class="empty">Показаны ${items.length} из ${total}. Уточните поиск.</div>` : '') || '<div class="empty">Ничего не нашлось</div>';
-      };
-      let t;
-      root.querySelector('#q').oninput = e => { clearTimeout(t); t = setTimeout(() => { st.q = e.target.value; draw(); }, 150); };
-      root.querySelector('#new').onclick = () => productEditSheet(ctx, null, { asBundle: true });
-      draw();
-    },
-  };
+// Отдельного пункта меню больше нет (ТЗ 1.10): старый адрес #/sets открывает «Товары» с фильтром «Комплекты».
+export function sets(ctx, p, query) {
+  (ctx.state.search ??= { q: '', multi: false, picked: [], sec: null, kind: null }).kind = 'bundles';
+  return search(ctx, p, query);
 }
