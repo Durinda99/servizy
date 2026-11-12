@@ -113,17 +113,28 @@ export class Model {
     return { need, got, waiting };
   }
   clientRequests(cid) { return this.db.all('request').filter(r => r.client_id === cid).sort((a, b) => b.created_at.localeCompare(a.created_at)); }
-  /** Название запроса: комплект или «Отдельные товары» */
-  requestTitle(r) { return r.kind === 'loose' ? 'Отдельные товары' : this.short(this.product(r.bundle_id)); }
-  requestSub(r) {
-    if (r.kind === 'loose') return 'запрос без комплекта';
-    const whole = this.requestItems(r.id).some(i => i.status === 'waiting' && i.product_id === r.bundle_id && this.isWhole(i));
-    return [this.shapePattern(this.product(r.bundle_id) || {}), whole ? 'ждёт целиком' : null].filter(Boolean).join(' · ');
+  /** Товар запроса: комплект или товарная позиция; null у запроса «Что-то подобное» (ТЗ 1.14) */
+  requestProduct(r) { return r?.product_id ? this.product(r.product_id) : null; }
+  /** Название запроса: название его товара, а у «Что-то подобное» — по виду свободной позиции */
+  requestTitle(r) {
+    const p = this.requestProduct(r);
+    if (p) return this.short(p);
+    const free = this.requestItems(r.id).find(i => !i.product_id);
+    return 'Что-то подобное' + (free ? ': ' + (this.kindName(free.kind_id) || '').toLowerCase() : '');
   }
-  looseRequest(cid) { return this.db.all('request').find(r => r.client_id === cid && r.kind === 'loose' && r.status === 'active') || null; }
-  /** Активный запрос клиента именно на этот комплект (самый новый) */
-  bundleRequest(cid, bundleId) {
-    return this.clientRequests(cid).find(r => r.status === 'active' && r.kind === 'bundle' && r.bundle_id === bundleId) || null;
+  requestSub(r) {
+    const p = this.requestProduct(r);
+    if (!p) {
+      const free = this.requestItems(r.id).find(i => !i.product_id);
+      return free ? `${this.shapeName(free.shape_id)} · ${this.patternName(free.pattern_id)}` : 'что-то подобное';
+    }
+    const isB = this.isBundle(p.id);
+    const whole = isB && this.requestItems(r.id).some(i => i.status === 'waiting' && i.product_id === p.id);
+    return [isB ? null : 'товар', this.shapePattern(p), whole ? 'ждёт целиком' : null].filter(Boolean).join(' · ');
+  }
+  /** Активный запрос клиента на этот же товар или комплект (самый новый) */
+  productRequest(cid, pid) {
+    return this.clientRequests(cid).find(r => r.status === 'active' && r.product_id === pid) || null;
   }
 
   /** Сколько клиентов ждут и сколько предметов в листе ожидания */
@@ -181,7 +192,7 @@ export class Model {
     const add = (key, pid, rc, ri, leaf, hint) => {
       const rem = this.remaining(ri);
       if (rem <= 0) return;
-      if (!groups.has(key)) groups.set(key, { arrival: pid, request: rc.r, client: rc.c, bundle: rc.r.bundle_id ? this.product(rc.r.bundle_id) : null, items: [], since: ri.created_at, hint });
+      if (!groups.has(key)) groups.set(key, { arrival: pid, request: rc.r, client: rc.c, bundle: this.requestProduct(rc.r), items: [], since: ri.created_at, hint });
       const g = groups.get(key);
       if (g.items.some(x => x.ri.id === ri.id)) return;
       g.items.push({ ri, leaf, remaining: rem, bought: this.bought(ri.id), similar: !ri.product_id, whole: this.isWhole(ri) });
@@ -219,10 +230,13 @@ export class Model {
   newItem(rid, product, qty, now) {
     return this.db.put('request_item', { request_id: rid, product_id: product.id, kind_id: null, shape_id: null, pattern_id: null, qty_needed: qty, price_kop: this.currentPrice(product.id), status: 'waiting', withdraw_reason: null, created_at: now, updated_at: null, closed_at: null, note: null });
   }
-  /** Запрос на комплект. lines: [{ product_id, qty, full }] — qty 0 означает «уже есть» */
+  newRequest(clientId, productId, now = nowISO(), note = null) {
+    return this.db.put('request', { client_id: clientId, product_id: productId ?? null, status: 'active', withdraw_reason: null, created_at: now, closed_at: null, note });
+  }
+  /** Запрос на комплект или товар. lines: [{ product_id, qty, full }] — qty 0 означает «уже есть» */
   createRequest(clientId, bundleId, lines, similar = [], note = null, { whole = 0 } = {}) {
     const now = nowISO();
-    const r = this.db.put('request', { client_id: clientId, kind: 'bundle', bundle_id: bundleId, status: 'active', withdraw_reason: null, created_at: now, closed_at: null, note });
+    const r = this.newRequest(clientId, bundleId, now, note);
     if (whole > 0) { this.newItem(r.id, this.product(bundleId), whole, now); return r; }
     for (const l of lines) {
       const p = this.product(l.product_id);
@@ -237,32 +251,37 @@ export class Model {
     this.closeIfDone(r.id);
     return r;
   }
-  /** Активные запросы клиента на комплект, к которым подходит товар по форме и рисунку (ТЗ 4.3) */
+  /** Активные запросы клиента на комплект, к которым подходит товар по форме и рисунку (ТЗ 4.2) */
   matchingRequests(cid, pid) {
     const p = this.product(pid);
-    if (!p) return [];
+    if (!p || this.isBundle(pid)) return []; // комплект в чужой комплект не добавляем: только новый или свой запрос
     return this.clientRequests(cid).filter(r => {
-      if (r.status !== 'active' || r.kind !== 'bundle') return false;
-      const b = this.product(r.bundle_id);
+      if (r.status !== 'active' || !r.product_id || r.product_id === pid || !this.isBundle(r.product_id)) return false;
+      const b = this.product(r.product_id);
       return b && p.shape_id && b.shape_id === p.shape_id && b.pattern_id === p.pattern_id;
     });
   }
   /**
-   * «Записать клиента» на товар: в выбранный запрос, в «Отдельные товары» или, если товар — комплект и
-   * newBundle = true, в новый запрос на этот комплект (в названии запроса — название комплекта).
+   * «Записать клиента» на товар (ТЗ 4.2): по умолчанию — новый запрос на этот товар (называется как товар);
+   * requestId — добавить в уже существующий запрос клиента.
    * Комплект «по частям» раскладывается на предметы, «целиком» — одна позиция.
    */
-  addToList(cid, pid, qty, requestId = null, { whole = false, newBundle = false } = {}) {
+  addToList(cid, pid, qty, requestId = null, { whole = false } = {}) {
     const now = nowISO();
-    let r;
-    if (newBundle && this.isBundle(pid)) r = this.db.put('request', { client_id: cid, kind: 'bundle', bundle_id: pid, status: 'active', withdraw_reason: null, created_at: now, closed_at: null, note: null });
-    else r = requestId ? this.db.get('request', requestId) : this.looseRequest(cid);
-    if (!r) r = this.db.put('request', { client_id: cid, kind: 'loose', bundle_id: null, status: 'active', withdraw_reason: null, created_at: now, closed_at: null, note: null });
+    let r = requestId ? this.db.get('request', requestId) : null;
+    if (!r) r = this.newRequest(cid, pid, now);
     else if (r.status !== 'active') r = this.db.put('request', { ...r, status: 'active', closed_at: null, withdraw_reason: null });
     const added = [];
     if (whole && this.isBundle(pid)) added.push(this.newItem(r.id, this.product(pid), qty, now));
     else for (const l of this.leaves(pid)) if (!l.product.is_packaging) added.push(this.newItem(r.id, l.product, qty * l.qty, now));
     return { request: r, added };
+  }
+  /** Запрос «Что-то подобное» (ТЗ 1.14): без товара, одна свободная позиция */
+  createSimilarRequest(cid, s) {
+    const now = nowISO();
+    const r = this.newRequest(cid, null, now);
+    this.addSimilar(r.id, s, now);
+    return r;
   }
   addSimilar(rid, { kind_id, shape_id, pattern_id, qty, note }, now = nowISO()) {
     const r = this.db.get('request', rid);
