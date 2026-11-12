@@ -57,13 +57,13 @@ export async function restoreBackup(ctx) {
 async function exportExcel(ctx) {
   const { db, m } = ctx;
   const cName = id => db.get('client', id)?.name ?? '';
-  const st = { active: 'ждёт', closed: 'всё куплено', withdrawn: 'снят с ожидания', waiting: 'ждёт', bought: 'куплено', done: 'выполнено', bundle: 'комплект', loose: 'отдельные товары' };
+  const st = { active: 'ждёт', closed: 'всё куплено', withdrawn: 'снят с ожидания', waiting: 'ждёт', bought: 'куплено', done: 'выполнено' };
   const kop = v => v == null ? null : v / 100;
   const reqs = db.all('request');
   const sheets = [
     { name: 'Клиенты', rows: [['Имя', 'Телефон', 'Заметки', 'В архиве', 'Создан'], ...db.all('client').map(c => [c.name, c.phone, c.note, c.is_archived ? 'да' : '', c.created_at])] },
-    { name: 'Запросы', rows: [['Клиент', 'Что собирает', 'Артикул', 'Статус', 'Причина снятия', 'Создан', 'Закрыт', 'Нужно', 'Собрано', 'Ждёт', 'Заметка'], ...reqs.map(r => { const b = r.bundle_id ? m.product(r.bundle_id) : null; const p = m.requestProgress(r.id); return [cName(r.client_id), b?.name ?? 'Отдельные товары', b?.article, st[r.status], r.withdraw_reason, r.created_at, r.closed_at, p.need, p.got, p.waiting, r.note]; })] },
-    { name: 'Позиции', rows: [['Клиент', 'Что собирает', 'Позиция', 'Артикул', 'Нужно', 'Куплено', 'Остаток', 'Статус', 'Причина снятия', 'Цена при записи, ₽', 'Цена сейчас, ₽', 'Дата записи', 'Изменено', 'Заметка'], ...db.all('request_item').map(ri => { const r = db.get('request', ri.request_id); const p = ri.product_id ? m.product(ri.product_id) : null; const bought = m.bought(ri.id); return [cName(r?.client_id), r ? m.requestTitle(r) : '', m.itemLabel(ri), p?.article, ri.qty_needed, bought, ri.status === 'waiting' ? Math.max(0, ri.qty_needed - bought) : 0, st[ri.status], ri.withdraw_reason, kop(ri.price_kop), p ? kop(m.currentPrice(p.id)) : null, ri.created_at, ri.updated_at, ri.note]; })] },
+    { name: 'Запросы', rows: [['Клиент', 'Что ждёт', 'Артикул', 'Статус', 'Причина снятия', 'Создан', 'Закрыт', 'Нужно', 'Собрано', 'Ждёт', 'Заметка'], ...reqs.map(r => { const b = m.requestProduct(r); const p = m.requestProgress(r.id); return [cName(r.client_id), b?.name ?? m.requestTitle(r), b?.article, st[r.status], r.withdraw_reason, r.created_at, r.closed_at, p.need, p.got, p.waiting, r.note]; })] },
+    { name: 'Позиции', rows: [['Клиент', 'Запрос', 'Позиция', 'Артикул', 'Нужно', 'Куплено', 'Остаток', 'Статус', 'Причина снятия', 'Цена при записи, ₽', 'Цена сейчас, ₽', 'Дата записи', 'Изменено', 'Заметка'], ...db.all('request_item').map(ri => { const r = db.get('request', ri.request_id); const p = ri.product_id ? m.product(ri.product_id) : null; const bought = m.bought(ri.id); return [cName(r?.client_id), r ? m.requestTitle(r) : '', m.itemLabel(ri), p?.article, ri.qty_needed, bought, ri.status === 'waiting' ? Math.max(0, ri.qty_needed - bought) : 0, st[ri.status], ri.withdraw_reason, kop(ri.price_kop), p ? kop(m.currentPrice(p.id)) : null, ri.created_at, ri.updated_at, ri.note]; })] },
     { name: 'Покупки', rows: [['Дата', 'Клиент', 'Позиция', 'Кол-во', 'Заметка'], ...db.all('purchase').map(pu => { const ri = db.get('request_item', pu.request_item_id); const r = ri && db.get('request', ri.request_id); return [pu.purchased_at, cName(r?.client_id), ri ? m.itemLabel(ri) : '', pu.qty, pu.note]; })] },
     { name: 'Напоминания', rows: [['Когда', 'Клиент', 'Заметка', 'Статус', 'Выполнено'], ...db.all('reminder').map(r => [r.remind_at, cName(r.client_id), r.note, st[r.status], r.done_at])] },
     { name: 'Цены', rows: [['Артикул', 'Название', 'Цена, ₽', 'Действует с'], ...db.all('product_price').map(pr => { const p = m.product(pr.product_id); return [p?.article, p?.name, kop(pr.price_kop), pr.valid_from]; })] },
@@ -164,6 +164,7 @@ export function importScreen(ctx) {
         const d = r.dicts;
         const rows = [
           r.selfSkipped && [r.selfSkipped, `${plural(r.selfSkipped, 'комплект указан', 'комплекта указаны', 'комплектов указаны')} в своём составе — эти строки пропущены`],
+          r.nestedExpanded && [r.nestedExpanded, `${plural(r.nestedExpanded, 'набор в составе комплекта разложен', 'набора в составе комплектов разложены', 'наборов в составе комплектов разложены')} на предметы (в состав входят только товары без состава)`],
           r.trimmed && [r.trimmed, 'артикулов с пробелом по краям — пробел убран'],
           r.packaging && [r.packaging, 'строк упаковки — отмечены, в подбор не попадут'],
           r.skippedRows && [r.skippedRows, 'служебных строк пропущено'],

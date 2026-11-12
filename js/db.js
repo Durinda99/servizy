@@ -1,13 +1,14 @@
-// База данных: таблицы из схемы v2. Всё держится в памяти (данных немного),
+// База данных: таблицы из схемы v5. Всё держится в памяти (данных немного),
 // каждое изменение пачкой пишется в IndexedDB одной транзакцией.
 
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
 
 const REASON_FROM_NOTE = { 'есть у клиента': 'уже есть', 'запрос закрыт': 'снят с ожидания', 'не нужно': 'не нужно' };
 
 /**
- * Перевод данных схемы v2 → v3 (ТЗ 1.6): статус «не нужно» → «снято с ожидания» с причиной,
- * у запроса появляется вид (комплект / отдельные товары). Возвращает true, если что-то изменилось.
+ * Перевод старых данных на текущую схему. Возвращает true, если что-то изменилось.
+ * v2 → v3 (ТЗ 1.6): статус «не нужно» → «снято с ожидания» с причиной, у запроса появляется вид.
+ * v3/v4 → v5 (ТЗ 1.12–1.14): запроса «Отдельные товары» больше нет — см. migrateV5.
  */
 export function migrate(db) {
   let changed = false;
@@ -19,6 +20,7 @@ export function migrate(db) {
     }
   }
   for (const [k, r] of db.t.request) {
+    if ('product_id' in r) continue; // уже схема 5
     let n = r;
     if (!r.kind) n = { ...n, kind: r.bundle_id ? 'bundle' : 'loose' };
     if (n.status === 'closed') {
@@ -28,8 +30,67 @@ export function migrate(db) {
     }
     if (n !== r) { db.t.request.set(k, n); changed = true; }
   }
+  if (migrateV5(db)) changed = true;
   const sv = db.t.settings.get('schema_version');
   if (sv?.value !== String(SCHEMA_VERSION)) { db.t.settings.set('schema_version', { key: 'schema_version', value: String(SCHEMA_VERSION) }); changed = true; }
+  return changed;
+}
+
+/**
+ * v4 → v5 (схема 5, раздел 6): у запроса вместо kind и bundle_id — product_id, товар запроса.
+ * Каждая позиция «Отдельных товаров» становится своим запросом; позиции, полученные «Разбить на состав»,
+ * остаются вместе с исходной. Даты записи, цены, покупки и место в очереди хранятся в позициях и не меняются.
+ * Напоминания к старому запросу остаются у клиента. Вложенные комплекты раскладываются на предметы.
+ */
+function migrateV5(db) {
+  let changed = false;
+  // вложенные комплекты: в составе остаются только товары без состава
+  const comp = db.t.bundle_item;
+  const bundles = new Set([...comp.values()].map(b => b.bundle_id));
+  for (const [k, o] of [...comp]) {
+    if (!bundles.has(o.product_id) || o.product_id === o.bundle_id) continue;
+    for (const i of [...comp.values()].filter(x => x.bundle_id === o.product_id)) {
+      const key = `${o.bundle_id}|${i.product_id}`;
+      const ex = comp.get(key);
+      comp.set(key, { bundle_id: o.bundle_id, product_id: i.product_id, quantity: (ex?.quantity || 0) + o.quantity * i.quantity });
+    }
+    comp.delete(k);
+    changed = true;
+  }
+  const reqs = db.t.request, items = db.t.request_item;
+  let maxId = 0;
+  for (const r of reqs.values()) if (r.id > maxId) maxId = r.id;
+  for (const [k, r] of [...reqs]) {
+    if ('product_id' in r) continue;
+    changed = true;
+    const { kind, bundle_id, ...rest } = r;
+    if (kind !== 'loose') { reqs.set(k, { ...rest, product_id: bundle_id ?? null }); continue; }
+    const its = [...items.values()].filter(i => i.request_id === r.id);
+    const groups = new Map();
+    for (const i of its) {
+      const g = its.some(x => x.id === i.split_from_id) ? i.split_from_id : i.id;
+      if (!groups.has(g)) groups.set(g, []);
+      groups.get(g).push(i);
+    }
+    for (const [g, list] of [...groups].sort((a, b) => a[0] - b[0])) {
+      const root = list.find(i => i.id === g);
+      const waiting = list.some(i => i.status === 'waiting');
+      const bought = list.some(i => i.status === 'bought');
+      const status = r.status === 'withdrawn' ? 'withdrawn' : waiting ? 'active' : bought ? 'closed' : 'withdrawn';
+      const nr = {
+        id: ++maxId, client_id: r.client_id, product_id: root.product_id ?? null, status,
+        withdraw_reason: r.status === 'withdrawn' ? r.withdraw_reason : status === 'withdrawn' ? root.withdraw_reason : null,
+        created_at: root.created_at,
+        closed_at: r.status === 'withdrawn' ? r.closed_at : waiting ? null : list.map(i => i.closed_at).filter(Boolean).sort().at(-1) ?? r.closed_at,
+        note: null,
+      };
+      reqs.set(String(nr.id), nr);
+      for (const i of list) items.set(String(i.id), { ...i, request_id: nr.id });
+    }
+    for (const [rk, rem] of db.t.reminder) if (rem.request_id === r.id) db.t.reminder.set(rk, { ...rem, request_id: null });
+    reqs.delete(k);
+  }
+  if (changed) db.maxId.request = undefined;
   return changed;
 }
 

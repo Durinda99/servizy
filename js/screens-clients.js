@@ -141,9 +141,9 @@ export function client(ctx, [id]) {
     <div class="card tight tap" id="note"><span class="xs b muted">ЗАМЕТКИ</span><span style="font-size:14px;white-space:pre-wrap;line-height:1.4">${c.note ? esc(c.note) : '<span class="muted">Нажмите, чтобы добавить заметку</span>'}</span></div>
     <div class="between" style="align-items:center"><span class="label">Напоминания</span><button class="linkbtn small" id="addrem">${icon.plus}Напоминание</button></div>
     ${remWait.length ? remWait.map(r => `<div class="card tight tap ${r.remind_at < nowISO() ? 'warn' : ''}" data-rem="${r.id}"><span class="xs b" style="color:${r.remind_at < nowISO() ? 'var(--warn)' : 'var(--blue)'}">${r.remind_at < nowISO() ? 'ПРОСРОЧЕНО · ' : ''}${esc(humanDT(r.remind_at))}</span>${r.note ? `<span class="small">${esc(r.note)}</span>` : ''}</div>`).join('') : '<span class="small muted">Нет запланированных звонков</span>'}
-    <div class="between" style="align-items:center"><span class="label">Собирает</span><a class="linkbtn small" href="#/client/${c.id}/new">${icon.plus}Новый запрос</a></div>
+    <div class="between" style="align-items:center"><span class="label">Ждёт</span><a class="linkbtn small" href="#/client/${c.id}/new">${icon.plus}Новый запрос</a></div>
     ${active.length ? active.map(reqCard).join('') : '<span class="small muted">Активных запросов нет</span>'}
-    <a class="linkbtn small" href="#/search">${icon.plus}Записать на отдельный товар (через поиск)</a>
+    <div class="row wrap" style="gap:4px 16px"><a class="linkbtn small" href="#/search">${icon.plus}Записать на товар (через поиск)</a><button class="linkbtn small" id="similar">${icon.plus}Что-то подобное</button></div>
     ${closed.length ? `<span class="label">Архив запросов</span>${closed.map(reqCard).join('')}` : ''}
     ${remDone.length ? `<span class="label">История звонков</span><div class="list">${remDone.slice(0, 20).map(r => `<div class="li"><span class="small">${esc(r.note || 'Звонок')}</span><span class="xs muted nowrap">${fmtDate(r.done_at || r.remind_at)}</span></div>`).join('')}</div>` : ''}
     <button class="btn" id="arch" style="margin-top:12px">Перенести клиента в архив</button>
@@ -156,6 +156,11 @@ export function client(ctx, [id]) {
         el.querySelector('#ok').onclick = async () => { db.put('client', { ...c, note: el.querySelector('#t').value.trim() || null }); await ctx.save(); close(); ctx.refresh(); };
       });
       root.querySelector('#addrem').onclick = () => newReminderSheet(ctx, c);
+      root.querySelector('#similar').onclick = () => similarSheet(ctx, null, async s => {
+        const r = m.createSimilarRequest(c.id, s);
+        await ctx.save('Записано в лист ожидания');
+        ctx.go('#/request/' + r.id);
+      });
       root.querySelectorAll('[data-rem]').forEach(el => el.onclick = () => reminderSheet(ctx, Number(el.dataset.rem)));
       root.querySelector('#arch').onclick = async () => {
         if (!(await confirmSheet('Перенести клиента в архив? Он перестанет попадать в подбор. История сохранится, клиента можно будет вернуть.', 'В архив'))) return;
@@ -367,7 +372,7 @@ export function request(ctx, [id]) {
   const r = db.get('request', Number(id));
   if (!r) return { html: `${top({ title: 'Запрос не найден' })}<div class="content"><div class="empty">Такого запроса нет.</div></div>` };
   const c = db.get('client', r.client_id);
-  const b = r.bundle_id ? m.product(r.bundle_id) : null;
+  const b = m.requestProduct(r);
   const items = m.requestItems(r.id);
   const pr = m.requestProgress(r.id);
   const waiting = items.filter(i => i.status === 'waiting');
@@ -589,15 +594,13 @@ export function addToList(ctx, [pid], query) {
   const isB = leaves.length > 1 || (leaves[0] && leaves[0].product.id !== p.id);
   let targets = [];
   if (c) {
-    // Для комплекта: сначала уже начатый запрос на этот же комплект, затем новый запрос на комплект
-    const same = isB ? m.bundleRequest(c.id, p.id) : null;
-    if (same) targets.push({ id: same.id, title: m.requestTitle(same), sub: 'Уже собирает этот комплект' });
-    if (isB) targets.push({ id: 'new', title: `Новый запрос: ${m.short(p)}`, sub: 'Запрос на комплект, называется как комплект' });
-    targets.push(...m.matchingRequests(c.id, p.id).filter(r => r.id !== same?.id).map(r => ({ id: r.id, title: m.requestTitle(r), sub: `Подходит: та же форма ${m.shapeName(p.shape_id)} и рисунок ${m.patternName(p.pattern_id)}` })));
-    const loose = m.looseRequest(c.id);
-    const n = loose ? m.requestItems(loose.id).filter(i => i.status === 'waiting').length : 0;
-    targets.push({ id: 'loose', title: 'Отдельные товары', sub: loose ? `Запрос без комплекта · сейчас там ${n} ${plural(n, 'позиция', 'позиции', 'позиций')}` : 'Запрос без комплекта — будет создан' });
-    if (!targets.some(t => t.id === st.target)) st.target = targets[0].id;
+    // ТЗ 4.2: по умолчанию — новый запрос на этот товар; затем запрос на этот же товар или комплект, если уже есть,
+    // и запросы на комплекты, к которым товар подходит по форме и рисунку
+    targets.push({ id: 'new', title: `Новый запрос: ${m.short(p)}`, sub: `В карточке клиента появится запрос «${m.short(p)}»` });
+    const same = m.productRequest(c.id, p.id);
+    if (same) targets.push({ id: same.id, title: m.requestTitle(same), sub: isB ? 'Клиент уже собирает этот комплект — добавить в этот запрос' : 'Клиент уже ждёт этот товар — добавить в этот запрос' });
+    targets.push(...m.matchingRequests(c.id, p.id).map(r => ({ id: r.id, title: m.requestTitle(r), sub: `Клиент его собирает, товар подходит: форма ${m.shapeName(p.shape_id)}, рисунок ${m.patternName(p.pattern_id)}` })));
+    if (!targets.some(t => t.id === st.target)) st.target = 'new';
   }
   const html = `${top({ title: 'Записать клиента' })}
   <div class="content" style="gap:14px">
@@ -620,10 +623,9 @@ export function addToList(ctx, [pid], query) {
       root.querySelectorAll('[data-mode]').forEach(b => b.onclick = () => { st.mode = b.dataset.mode; ctx.refresh(); });
       root.querySelector('#pick').onclick = async () => { const { pickClientSheet } = await import('./screens-products.js'); pickClientSheet(ctx, cid => { st.cid = cid; st.target = null; ctx.refresh(); }); };
       root.querySelector('#newc').onclick = () => newClientSheet(ctx, cl => { st.cid = cl.id; st.target = null; ctx.refresh(); });
-      root.querySelectorAll('[data-t]').forEach(b => b.onclick = () => { st.target = (b.dataset.t === 'loose' || b.dataset.t === 'new') ? b.dataset.t : Number(b.dataset.t); ctx.refresh(); });
+      root.querySelectorAll('[data-t]').forEach(b => b.onclick = () => { st.target = b.dataset.t === 'new' ? 'new' : Number(b.dataset.t); ctx.refresh(); });
       root.querySelector('#ok').onclick = async () => {
-        const toLoose = st.target === 'loose', toNew = st.target === 'new';
-        const res = m.addToList(c.id, p.id, st.qty, (toLoose || toNew) ? null : st.target, { whole: isB && st.mode === 'whole', newBundle: toNew });
+        const res = m.addToList(c.id, p.id, st.qty, st.target === 'new' ? null : st.target, { whole: isB && st.mode === 'whole' });
         ctx.state.add = null;
         await ctx.save('Записано в лист ожидания');
         location.replace('#/request/' + res.request.id);

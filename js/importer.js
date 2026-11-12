@@ -73,7 +73,7 @@ export function catalogToWorkbook(cat) {
  * Изменяет db (без commit) и возвращает отчёт.
  */
 export function importCatalog(db, wb, { fileDate, kindmap = {} }) {
-  const rep = { added: 0, updated: 0, pricesChanged: 0, pricesAdded: 0, bundles: 0, compItems: 0, compOnlyAdded: 0, packaging: 0, selfSkipped: 0, trimmed: 0, skippedRows: 0, kindsByRules: 0, missingBundles: [], mismatches: [], fileDate };
+  const rep = { added: 0, updated: 0, pricesChanged: 0, pricesAdded: 0, bundles: 0, compItems: 0, compOnlyAdded: 0, packaging: 0, selfSkipped: 0, nestedExpanded: 0, trimmed: 0, skippedRows: 0, kindsByRules: 0, missingBundles: [], mismatches: [], fileDate };
   const tovName = wb.sheetNames.find(n => /товар/i.test(n)) ?? wb.sheetNames[0];
   const compName = wb.sheetNames.find(n => /состав/i.test(n)) ?? wb.sheetNames[1];
   const tov = wb.sheets[tovName] || [];
@@ -263,6 +263,22 @@ export function importCatalog(db, wb, { fileDate, kindmap = {} }) {
     if (t.item.kind_id !== kid || t.item.is_packaging !== isPack) { t.item.kind_id = kid; t.item.is_packaging = isPack; db.put('product', t.item); }
   }
   rep.kindsByRules += fromRules.size;
+
+  // в состав комплекта входят только товары без состава (ТЗ 1.13): вложенный набор раскладывается на свои предметы
+  const compOf = id => {
+    if (newComp.has(id)) return newComp.get(id);
+    const own = db.all('bundle_item').filter(bi => bi.bundle_id === id);
+    return own.length ? new Map(own.map(bi => [bi.product_id, bi.quantity])) : null;
+  };
+  for (const [bid, items] of newComp) {
+    for (const [pid, qty] of [...items]) {
+      const sub = pid === bid ? null : compOf(pid);
+      if (!sub) continue;
+      items.delete(pid);
+      for (const [sp, sq] of sub) if (sp !== pid && sp !== bid) items.set(sp, (items.get(sp) || 0) + qty * sq);
+      rep.nestedExpanded++;
+    }
+  }
 
   const oldComp = new Map();
   for (const bi of db.all('bundle_item')) {

@@ -309,7 +309,7 @@ export function product(ctx, [id]) {
       <div class="list">${items.map(i => `<a class="li" href="#/product/${i.product.id}"><span class="col" style="gap:1px"><span style="font-size:14px;${i.product.is_packaging ? 'color:var(--muted)' : ''}">${esc(m.short(i.product))}</span><span class="xs muted">${i.product.article ? esc(i.product.article) : 'без артикула'}${i.product.is_packaging ? ' · упаковка' : ''}</span></span><span class="b nowrap">× ${i.quantity}</span></a>`).join('')}</div>
       <button class="btn soft" id="enroll">Записать клиента на весь комплект (целиком или по частям)</button>` : ''}
     ${inB.length ? `<span class="label">Входит в комплекты</span><div class="list">${inB.map(b => `<a class="li" href="#/product/${b.bundle.id}"><span style="font-size:14px">${esc(b.bundle.name)}</span><span class="b nowrap">× ${b.quantity}</span></a>`).join('')}</div>` : ''}
-    ${!isB && !p.is_packaging ? `<button class="btn soft" id="addcomp">Сделать комплектом (задать состав)</button>` : ''}
+    ${!isB && !p.is_packaging && !inB.length ? `<button class="btn soft" id="addcomp">Сделать комплектом (задать состав)</button>` : ''}
   </div>`;
   return {
     html,
@@ -394,7 +394,8 @@ function compositionSheet(ctx, bundle) {
     const q = el.querySelector('#q');
     q.oninput = () => {
       const { items } = m.searchProducts(q.value, { limit: 8 });
-      el.querySelector('#found').innerHTML = q.value.trim() ? items.filter(p => p.id !== bundle.id).map(p => `<button class="btn" style="height:auto;min-height:48px;padding:8px 12px;justify-content:flex-start;text-align:left;font-size:14px" data-add="${p.id}">+ ${esc(p.name)}</button>`).join('') : '';
+      // в состав входят только товары без состава (ТЗ 1.13)
+      el.querySelector('#found').innerHTML = q.value.trim() ? items.filter(p => p.id !== bundle.id && !m.isBundle(p.id)).map(p => `<button class="btn" style="height:auto;min-height:48px;padding:8px 12px;justify-content:flex-start;text-align:left;font-size:14px" data-add="${p.id}">+ ${esc(p.name)}</button>`).join('') : '';
     };
     el.querySelector('#found').onclick = e => {
       const b = e.target.closest('[data-add]');
@@ -410,6 +411,8 @@ function compositionSheet(ctx, bundle) {
       const keep = lines.filter(l => l.qty > 0);
       const total = keep.reduce((s, l) => s + l.qty, 0);
       if (keep.length && total < 2) { toast('В комплекте должно быть два предмета или больше'); return; }
+      if (keep.length && m.bundlesContaining(bundle.id).length) { toast('Этот товар входит в состав другого комплекта, своего состава у него быть не может'); return; }
+      if (keep.some(l => m.isBundle(l.pid))) { toast('В состав входят только товары без состава'); return; }
       for (const bi of db.all('bundle_item').filter(b => b.bundle_id === bundle.id)) if (!keep.some(l => l.pid === bi.product_id)) db.del('bundle_item', [bundle.id, bi.product_id]);
       for (const l of keep) db.put('bundle_item', { bundle_id: bundle.id, product_id: l.pid, quantity: l.qty });
       await ctx.save('Состав сохранён');
