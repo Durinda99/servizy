@@ -31,7 +31,7 @@ hits AS (
   WHERE ri.status = 'waiting'
     AND ri.product_id NOT IN (SELECT leaf_id FROM leaf)
 )
-SELECT c.name AS client, c.phone, COALESCE(b.name, 'Отдельные товары') AS collecting,
+SELECT c.name AS client, c.phone, COALESCE(b.name, 'Что-то подобное') AS request_title,
        h.item, h.qty_in_arrival, h.whole_hint,
        ri.qty_needed - COALESCE((SELECT SUM(qty) FROM purchase WHERE request_item_id = ri.id), 0) AS remaining,
        ri.created_at, ri.price_kop AS price_at_signup,
@@ -42,6 +42,6 @@ FROM hits h
 JOIN request_item ri ON ri.id = h.ri_id
 JOIN request r ON r.id = ri.request_id AND r.status = 'active'
 JOIN client c ON c.id = r.client_id AND c.is_archived = 0
-LEFT JOIN product b ON b.id = r.bundle_id
+LEFT JOIN product b ON b.id = r.product_id
 WHERE remaining > 0
 ORDER BY h.whole_hint, ri.created_at;

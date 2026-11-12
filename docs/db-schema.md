@@ -1,6 +1,6 @@
 # Схема базы данных: сервизы по частям
 
-**Версия схемы 4 от 10.11.2026, соответствует [ТЗ](TZ.md) версии 1.8.** Что менялось — в разделе 8 «История версий». Копия документа «Схема базы данных» с claude.ai; SQL лежит отдельными файлами в [sql/](sql/).
+**Версия схемы 5 от 13.11.2026, соответствует [ТЗ](TZ.md) версии 1.13.** Что менялось — в разделе 8 «История версий». Копия документа «Схема базы данных» с claude.ai; SQL лежит отдельными файлами в [sql/](sql/).
 
 ## 1. Принципы и допущения
 
@@ -26,7 +26,7 @@
 
 **Допущения:**
 
-- Вложенность комплектов одна: комплект состоит из предметов, а не из других комплектов. В файле так и есть.
+- В состав комплекта входят только товары без состава (ТЗ 1.13), это проверяет база. В файле так собраны все комплекты, кроме двух сервизов «Идиллия» с рисунком «Астра» (81.32371.00.1 и 81.32396.00.1): в их составе указаны наборы «Чашка с блюдцем» 81.32372.00.1 и 81.32373.00.1. При загрузке такой набор заменяется своими предметами — чашкой и блюдцем в нужном количестве.
 - Число персон и предметов хранится так, как указано в файле, потому что состав иногда неполный или включает упаковку.
 - Наличие на сайте хранится только для справки: складской учёт по ТЗ не ведётся.
 
@@ -44,7 +44,7 @@ erDiagram
   product ||--o{ bundle_item : "комплект"
   product ||--o{ bundle_item : "предмет"
   client ||--o{ request : ""
-  product |o--o{ request : "собираемый комплект"
+  product |o--o{ request : "товар запроса"
   request ||--o{ request_item : "позиции"
   product |o--o{ request_item : "товар или комплект целиком"
   request_item |o--o{ request_item : "split_from_id"
@@ -117,7 +117,7 @@ erDiagram
 | product\_id | INTEGER | ссылка на product — предмет («Артикул предмета», а если его нет, то созданный предмет) |
 | quantity | INTEGER | не меньше 1 («Шт. в комплекте») |
 
-Первичный ключ составной: (bundle\_id, product\_id). Комплект не может входить сам в себя.
+Первичный ключ составной: (bundle\_id, product\_id). Комплект не может входить сам в себя. В состав входят только товары без состава: товар, у которого есть состав, не может стать предметом другого комплекта, а у предмета из чьего-то состава не может появиться свой состав (триггеры trg\_bundle\_item\_leaf\_insert и trg\_bundle\_item\_leaf\_update). Отдельного признака «комплект» у товара нет: комплект — это товар, у которого есть строки в bundle\_item.
 
 ### 3.4. Клиенты, запросы и покупки
 
@@ -132,21 +132,20 @@ erDiagram
 | is\_archived | INTEGER | 0 или 1, по умолчанию 0 |
 | created\_at | TEXT | дата создания |
 
-**request** — запрос: на комплект или «Отдельные товары»
+**request** — запрос: на комплект или на товарную позицию
 
 | Поле | Тип | Ограничения |
 | --- | --- | --- |
 | id | INTEGER | первичный ключ |
 | client\_id | INTEGER | обязательно, ссылка на client; при удалении клиента навсегда удаляется вместе с ним |
-| kind | TEXT | bundle (собирает комплект) или loose («Отдельные товары», без комплекта), по умолчанию bundle |
-| bundle\_id | INTEGER | ссылка на product — собираемый комплект; обязательно у bundle, пусто у loose |
+| product\_id | INTEGER | ссылка на product — товар, на который запрос: комплект или товарная позиция. Пусто только у запроса из одной свободной позиции «что-то подобное» |
 | status | TEXT | active (ждёт), closed (всё куплено) или withdrawn (снят с ожидания), по умолчанию active |
 | withdraw\_reason | TEXT | причина, если весь запрос снят с ожидания |
 | created\_at | TEXT | дата записи |
 | closed\_at | TEXT | дата закрытия или снятия, пока запрос активен пусто |
 | note | TEXT | заметка |
 
-У клиента может быть только один активный запрос «Отдельные товары»: товары, записанные из раздела «Товары», добавляются в него.
+Запрос на комплект или на товар определяется по товару запроса: если у него есть состав, это запрос на комплект. У клиента может быть сколько угодно запросов на разные товары, общего запроса «Отдельные товары» нет (ТЗ 1.12). Название запроса — название его товара.
 
 **request\_item** — позиция запроса: либо предмет из состава комплекта, либо свободная позиция «что-то подобное»
 
@@ -246,7 +245,7 @@ hits AS (
   WHERE ri.status = 'waiting'
     AND ri.product_id NOT IN (SELECT leaf_id FROM leaf)
 )
-SELECT c.name AS client, c.phone, COALESCE(b.name, 'Отдельные товары') AS collecting,
+SELECT c.name AS client, c.phone, COALESCE(b.name, 'Что-то подобное') AS request_title,
        h.item, h.qty_in_arrival, h.whole_hint,
        ri.qty_needed - COALESCE((SELECT SUM(qty) FROM purchase
                                  WHERE request_item_id = ri.id), 0) AS remaining,
@@ -258,7 +257,7 @@ FROM hits h
 JOIN request_item ri ON ri.id = h.ri_id
 JOIN request r ON r.id = ri.request_id AND r.status = 'active'
 JOIN client c ON c.id = r.client_id AND c.is_archived = 0
-LEFT JOIN product b ON b.id = r.bundle_id
+LEFT JOIN product b ON b.id = r.product_id
 WHERE remaining > 0
 ORDER BY h.whole_hint, ri.created_at;
 ```
@@ -347,9 +346,9 @@ WHERE id = :item_id;
 База проверяет форму данных, а последовательность действий обеспечивает приложение. Каждое из действий ниже выполняется одной транзакцией, чтобы не остаться с половиной изменений.
 
 - **Запрос на комплект.** Для выбранного комплекта в request\_item копируется каждая строка состава bundle\_item, кроме упаковки: предмет, количество в qty\_needed, цена предмета из справочника на этот день в price\_kop (если у предмета есть цена), дата записи в created\_at. То, что у клиента уже есть, сразу снимается с ожидания с причиной «уже есть».
-- **Запись на товар из «Товаров».** Позиция добавляется в выбранный запрос на комплект или в запрос kind = loose («Отдельные товары»). Если такого запроса у клиента нет, он создаётся. Если записывают комплект (например, «Чашка с блюдцем»), добавляются его предметы.
+- **Запись на товар из «Товаров».** По умолчанию создаётся новый запрос с product\_id = этот товар. Если это предмет, в запросе одна позиция — сам предмет. Если комплект — позиции как у запроса на комплект: «Целиком» (одна позиция — комплект) или «По частям» (предметы состава). Продавец может вместо этого добавить позицию в уже существующий запрос клиента на этот же комплект или на комплект, к которому товар подходит по форме и рисунку.
 - **Свободная позиция.** Создаётся с kind\_id, shape\_id и pattern\_id, без предмета и цены.
-- **Подбор.** Поступивший комплект раскладывается на предметы (раздел 4.1), поэтому «Чашка с блюдцем» находит тех, кому не хватает чашек и блюдец, в том числе в «Отдельных товарах».
+- **Подбор.** Поступивший комплект раскладывается на предметы (раздел 4.1), поэтому «Чашка с блюдцем» находит тех, кому не хватает чашек и блюдец, в том числе тех, кто ждёт отдельно чашку или блюдце.
 - **«Купил».** В purchase добавляется строка с количеством и датой. Если сумма покупок по позиции достигла qty\_needed, позиция получает статус bought и дату закрытия. Если куплен комплект «Чашка с блюдцем», покупка записывается в обе позиции: чашку и блюдце.
 - **«Изменить».** Меняются только qty\_needed, note и updated\_at. Триггер не даёт сделать qty\_needed меньше суммы покупок. Цена и created\_at не меняются, поэтому место в очереди сохраняется.
 - «Разбить на состав» — только у ждущей позиции «комплект целиком» (триггер trg\_split\_only\_waiting\_bundle). Новые позиции ссылаются на исходную через split\_from\_id и наследуют её дату записи.
@@ -361,11 +360,11 @@ WHERE id = :item_id;
 - **Архив.** Клиентов и товары помечают is\_archived = 1. Архивные товары не предлагаются при создании новых запросов, архивные клиенты не попадают в подбор.
 - **Удалить навсегда.** Работает каскадом (`ON DELETE CASCADE`): удаление клиента убирает его запросы, позиции, покупки и напоминания; удаление запроса — его позиции, покупки и напоминания; удаление позиции — её покупки и напоминания. Триггеры разрешают удалить клиента только из архива, а запрос и позицию — только снятые с ожидания или закрытые. Товары, комплекты и цены удаление клиента не затрагивает. Перед удалением приложение показывает, что исчезнет (раздел 4.5).
 - **Ссылки.** Включена проверка внешних ключей (`PRAGMA foreign_keys = ON`). Товар, на который ссылаются запросы или комплекты, удалить нельзя.
-- **Индексы.** По `bundle_item(product_id)` и `product(kind_id, shape_id, pattern_id)` для разложения комплектов, по `request_item(product_id)` и `request_item(kind_id, shape_id, pattern_id)` для подбора, по `reminder(remind_at)`, `product_price(product_id, valid_from)`, `product(name)` и `client(name)` для поиска. Уникальный частичный индекс — один активный запрос «Отдельные товары» на клиента.
+- **Индексы.** По `bundle_item(product_id)` и `product(kind_id, shape_id, pattern_id)` для разложения комплектов, по `request_item(product_id)` и `request_item(kind_id, shape_id, pattern_id)` для подбора, по `reminder(remind_at)`, `product_price(product_id, valid_from)`, `product(name)` и `client(name)` для поиска. По request(product\_id) — чтобы найти запросы клиентов на этот товар.
 
 ## 6. SQL для создания базы
 
-Полный скрипт для SQLite, версия 4. Проверен загрузкой файла товаров и сценариями: правка количества ниже купленного и удаление клиента не из архива блокируются, второй запрос «Отдельные товары» не создаётся, удаление архивного клиента убирает его запросы, позиции, покупки и напоминания, а товары остаются; «Разбить на состав» не комплекта или не ждущей позиции блокируется. Состав комплекта (минимум два предмета или один предмет в количестве больше 1) проверяет приложение, а не база.
+Полный скрипт для SQLite, версия 5. Проверен загрузкой файла товаров и сценариями: правка количества ниже купленного и удаление клиента не из архива блокируются, комплект в составе другого комплекта не добавляется, удаление архивного клиента убирает его запросы, позиции, покупки и напоминания, а товары остаются; «Разбить на состав» не комплекта или не ждущей позиции блокируется. Состав комплекта (минимум два предмета или один предмет в количестве больше 1) проверяет приложение, а не база.
 
 ```sql
 PRAGMA foreign_keys = ON;
@@ -458,14 +457,12 @@ CREATE TABLE client (
 CREATE TABLE request (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   client_id INTEGER NOT NULL REFERENCES client(id) ON DELETE CASCADE,
-  kind TEXT NOT NULL DEFAULT 'bundle' CHECK (kind IN ('bundle', 'loose')),
-  bundle_id INTEGER REFERENCES product(id),
+  product_id INTEGER REFERENCES product(id),
   status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'closed', 'withdrawn')),
   withdraw_reason TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
   closed_at TEXT,
-  note TEXT,
-  CHECK ((kind = 'bundle' AND bundle_id IS NOT NULL) OR (kind = 'loose' AND bundle_id IS NULL))
+  note TEXT
 );
 
 CREATE TABLE request_item (
@@ -529,8 +526,24 @@ CREATE INDEX idx_reminder_at ON reminder(remind_at);
 CREATE INDEX idx_price_lookup ON product_price(product_id, valid_from);
 CREATE INDEX idx_client_name ON client(name);
 
--- У клиента один активный запрос «Отдельные товары»
-CREATE UNIQUE INDEX uq_loose_request ON request(client_id) WHERE kind = 'loose' AND status = 'active';
+CREATE INDEX idx_request_product ON request(product_id);
+
+-- В состав комплекта входят только товары без состава: вложенных комплектов нет
+CREATE TRIGGER trg_bundle_item_leaf_insert
+BEFORE INSERT ON bundle_item
+WHEN EXISTS (SELECT 1 FROM bundle_item WHERE bundle_id = NEW.product_id)
+  OR EXISTS (SELECT 1 FROM bundle_item WHERE product_id = NEW.bundle_id)
+BEGIN
+  SELECT RAISE(ABORT, 'В состав комплекта входят только товары без состава');
+END;
+
+CREATE TRIGGER trg_bundle_item_leaf_update
+BEFORE UPDATE OF bundle_id, product_id ON bundle_item
+WHEN EXISTS (SELECT 1 FROM bundle_item WHERE bundle_id = NEW.product_id)
+  OR EXISTS (SELECT 1 FROM bundle_item WHERE product_id = NEW.bundle_id)
+BEGIN
+  SELECT RAISE(ABORT, 'В состав комплекта входят только товары без состава');
+END;
 
 -- «Изменить»: нужное количество не меньше уже купленного
 CREATE TRIGGER trg_qty_not_below_bought
@@ -574,7 +587,121 @@ END;
 
 INSERT INTO section (name, sort_order) VALUES
   ('Столовые предметы', 1), ('Чайно-кофейные предметы', 2), ('Сервизы', 3);
-INSERT INTO settings (key, value) VALUES ('schema_version', '4');
+INSERT INTO settings (key, value) VALUES ('schema_version', '5');
+```
+
+**Переход со схемы 4.** Скрипт выполняется один раз при обновлении базы. Каждая позиция запроса «Отдельные товары» становится своим запросом на этот товар; позиции, полученные «Разбить на состав», остаются вместе с исходной позицией. Даты записи, цены, покупки и место в очереди не меняются: они хранятся в позициях. Напоминания, привязанные к запросу «Отдельные товары», остаются у клиента. Вложенные наборы в составе комплектов раскладываются на предметы. Скрипт проверен на тестовой базе версии 4: проверка внешних ключей проходит, таблица запросов, индексы и триггеры совпадают со скриптом версии 5.
+
+```sql
+-- Переход со схемы 4 на схему 5 (ТЗ 1.12): запроса «Отдельные товары» больше нет.
+-- Каждая позиция запроса «Отдельные товары» становится своим запросом на этот товар.
+-- Позиции, полученные «Разбить на состав», идут в запрос своей исходной позиции.
+-- Даты записи, цены, покупки и место в очереди не меняются: они хранятся в позициях.
+-- Выполняется одной транзакцией при выключенной проверке внешних ключей.
+PRAGMA foreign_keys = OFF;
+BEGIN;
+
+-- 0. Вложенные комплекты (например, «Чашка с блюдцем» в составе сервиза) раскладываются на предметы:
+--    в составе остаются только товары без состава
+INSERT INTO bundle_item (bundle_id, product_id, quantity)
+SELECT o.bundle_id, i.product_id, o.quantity * i.quantity
+FROM bundle_item o JOIN bundle_item i ON i.bundle_id = o.product_id
+WHERE true
+ON CONFLICT (bundle_id, product_id) DO UPDATE SET quantity = quantity + excluded.quantity;
+DELETE FROM bundle_item WHERE product_id IN (SELECT bundle_id FROM bundle_item);
+
+-- 1. Какие позиции куда переезжают: группа = исходная позиция и полученные из неё разбиением
+CREATE TEMP TABLE mv AS
+SELECT ri.id AS item_id,
+       COALESCE(ri.split_from_id, ri.id) AS grp
+FROM request_item ri
+JOIN request r ON r.id = ri.request_id
+WHERE r.kind = 'loose';
+
+CREATE TEMP TABLE grp AS
+SELECT g.grp,
+       (SELECT MAX(id) FROM request) + ROW_NUMBER() OVER (ORDER BY g.grp) AS new_id,
+       r.client_id,
+       gi.product_id,                                   -- товар исходной позиции (пусто у «что-то подобное»)
+       CASE
+         WHEN r.status = 'withdrawn' THEN 'withdrawn'
+         WHEN SUM(ri.status = 'waiting') > 0 THEN 'active'
+         WHEN SUM(ri.status = 'bought') > 0 THEN 'closed'
+         ELSE 'withdrawn'
+       END AS status,
+       CASE WHEN r.status = 'withdrawn' THEN r.withdraw_reason ELSE gi.withdraw_reason END AS withdraw_reason,
+       gi.created_at,
+       CASE WHEN r.status = 'withdrawn' THEN r.closed_at
+            WHEN SUM(ri.status = 'waiting') > 0 THEN NULL
+            ELSE MAX(ri.closed_at) END AS closed_at
+FROM mv g
+JOIN request_item ri ON ri.id = g.item_id
+JOIN request_item gi ON gi.id = g.grp
+JOIN request r ON r.id = ri.request_id
+GROUP BY g.grp;
+
+-- 2. Новая таблица запросов: товар запроса вместо kind и bundle_id
+CREATE TABLE request_v5 (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  client_id INTEGER NOT NULL REFERENCES client(id) ON DELETE CASCADE,
+  product_id INTEGER REFERENCES product(id),
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'closed', 'withdrawn')),
+  withdraw_reason TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+  closed_at TEXT,
+  note TEXT
+);
+INSERT INTO request_v5 (id, client_id, product_id, status, withdraw_reason, created_at, closed_at, note)
+SELECT id, client_id, bundle_id, status, withdraw_reason, created_at, closed_at, note
+FROM request WHERE kind = 'bundle';
+INSERT INTO request_v5 (id, client_id, product_id, status, withdraw_reason, created_at, closed_at)
+SELECT new_id, client_id, product_id, status, withdraw_reason, created_at, closed_at FROM grp;
+
+-- 3. Позиции переезжают в новые запросы; напоминания к старому запросу остаются у клиента
+UPDATE request_item
+SET request_id = (SELECT grp.new_id FROM mv JOIN grp ON grp.grp = mv.grp WHERE mv.item_id = request_item.id)
+WHERE id IN (SELECT item_id FROM mv);
+UPDATE reminder SET request_id = NULL
+WHERE request_id IN (SELECT id FROM request WHERE kind = 'loose');
+
+-- 4. Замена таблицы (триггеры на request удаляются вместе со старой таблицей и создаются заново)
+-- legacy_alter_table: триггеры позиций ссылаются на request, пока таблицы нет
+PRAGMA legacy_alter_table = ON;
+DROP TABLE request;
+ALTER TABLE request_v5 RENAME TO request;
+PRAGMA legacy_alter_table = OFF;
+DROP INDEX IF EXISTS uq_loose_request;
+CREATE INDEX idx_request_product ON request(product_id);
+
+CREATE TRIGGER trg_delete_request_only_archived
+BEFORE DELETE ON request
+WHEN OLD.status = 'active' AND (SELECT is_archived FROM client WHERE id = OLD.client_id) = 0
+BEGIN
+  SELECT RAISE(ABORT, 'Сначала снимите запрос с ожидания');
+END;
+
+CREATE TRIGGER trg_bundle_item_leaf_insert
+BEFORE INSERT ON bundle_item
+WHEN EXISTS (SELECT 1 FROM bundle_item WHERE bundle_id = NEW.product_id)
+  OR EXISTS (SELECT 1 FROM bundle_item WHERE product_id = NEW.bundle_id)
+BEGIN
+  SELECT RAISE(ABORT, 'В состав комплекта входят только товары без состава');
+END;
+
+CREATE TRIGGER trg_bundle_item_leaf_update
+BEFORE UPDATE OF bundle_id, product_id ON bundle_item
+WHEN EXISTS (SELECT 1 FROM bundle_item WHERE bundle_id = NEW.product_id)
+  OR EXISTS (SELECT 1 FROM bundle_item WHERE product_id = NEW.bundle_id)
+BEGIN
+  SELECT RAISE(ABORT, 'В состав комплекта входят только товары без состава');
+END;
+
+UPDATE settings SET value = '5' WHERE key = 'schema_version';
+DROP TABLE mv;
+DROP TABLE grp;
+COMMIT;
+PRAGMA foreign_keys = ON;
+PRAGMA foreign_key_check;
 ```
 
 ## 7. Загрузка из файла и замечания по данным
@@ -582,7 +709,7 @@ INSERT INTO settings (key, value) VALUES ('schema_version', '4');
 ### 7.1. Порядок загрузки
 
 1. **Лист «Товары».** Каждая строка с артикулом становится товаром с отметкой «продаётся отдельно». Пробелы по краям артикула убираются. Форма, рисунок, вид и коллекция заносятся в справочники, раздел разбивается по запятой. Цена записывается в справочник цен с датой файла (дата выгрузки, например 05.11.2026). Последняя строка с пояснением об источнике пропускается.
-2. **Лист «Состав комплектов».** Служебные строки с заголовками («Артикул — Наименование…») и пустые строки пропускаются. Если артикул предмета есть среди товаров, используется этот товар. Если нет, создаётся предмет «только в составе» с формой и рисунком комплекта. Предметы без артикула объединяются по названию, форме и рисунку.
+2. **Лист «Состав комплектов».** Служебные строки с заголовками («Артикул — Наименование…») и пустые строки пропускаются. Если артикул предмета есть среди товаров, используется этот товар. Если нет, создаётся предмет «только в составе» с формой и рисунком комплекта. Предметы без артикула объединяются по названию, форме и рисунку. Если в составе указан другой комплект (например, «Чашка с блюдцем» в сервизе), вместо него записываются его предметы, количество перемножается: в состав попадают только товары без состава.
 3. **Упаковка.** Строки «Подарочная упаковка», «Коробка», «Буклет», «Шубер» получают отметку «упаковка».
 4. **Повторная загрузка.** Товары сопоставляются по артикулу. Новые добавляются, у существующих обновляются поля, а при изменении цены в справочник добавляется новая запись. Ничего не удаляется.
 
@@ -593,6 +720,7 @@ INSERT INTO settings (key, value) VALUES ('schema_version', '4');
 | Что | Сколько | Как поступаем |
 | --- | --- | --- |
 | Комплект указан в составе самого себя (например, 81.10353.00.1, 80.05471.00.1) | 14 | Такие строки пропускаются |
+| В составе сервиза указан другой комплект: «Чашка с блюдцем» 81.32372.00.1 и 81.32373.00.1 в сервизах «Идиллия» с рисунком «Астра» 81.32371.00.1 и 81.32396.00.1 | 4 строки в 2 комплектах | Вместо набора записываются его чашка и блюдце, количество перемножается |
 | Артикул в названии не совпадает с колонкой «Артикул»: 80.98406.00.1, а в названии 80.86102.00.1 | 1 | Берётся колонка «Артикул», нужно проверить вручную |
 | Пробел в конце артикула | 7 | Убирается при загрузке |
 | Одна форма записана по-разному («Стандартная 2», «Стандартная-2», «Стандартная - 2» и т. п.) | 9 групп | Склеиваются без учёта регистра, пробелов и дефисов |
@@ -610,6 +738,7 @@ INSERT INTO settings (key, value) VALUES ('schema_version', '4');
 
 | Версия | Дата | ТЗ | Что изменилось |
 | --- | --- | --- | --- |
+| 5 | 13.11.2026 | 1.13 | Запроса «Отдельные товары» больше нет: у запроса вместо kind и bundle\_id поле product\_id — товар, на который запрос (комплект или товарная позиция); убран уникальный индекс uq\_loose\_request. В состав комплекта входят только товары без состава (триггеры trg\_bundle\_item\_leaf\_insert и trg\_bundle\_item\_leaf\_update), вложенные наборы в файле раскладываются на предметы. Скрипт перехода со схемы 4 — в разделе 6 |
 | 4 | 10.11.2026 | 1.8 | Комплект целиком в листе ожидания: статус позиции split, поле split\_from\_id, триггер trg\_split\_only\_waiting\_bundle; подбор (4.1) находит ждущих комплект целиком и даёт подсказку «ждёт целиком»; новый запрос 4.6 «Разбить на состав» |
 | 3 | 10.11.2026 | 1.6 | Запрос «Отдельные товары» без комплекта (request.kind, bundle\_id может быть пустым). Статус позиции not\_needed заменён на withdrawn («снято с ожидания») с причиной; у запроса тоже есть статус withdrawn. Поле updated\_at и триггер для «Изменить». Удаление навсегда каскадом, только из архива. Запрос 4.5 для окна подтверждения |
 | 2 | 03.11.2026 | 1.2 | Сверка с файлом с сайта: артикул как ключ, комплект — это товар с составом, предметы «только в составе», упаковка, разделы и коллекции, раскладка комплекта при подборе, загрузка из файла |

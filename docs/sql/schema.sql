@@ -88,14 +88,12 @@ CREATE TABLE client (
 CREATE TABLE request (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   client_id INTEGER NOT NULL REFERENCES client(id) ON DELETE CASCADE,
-  kind TEXT NOT NULL DEFAULT 'bundle' CHECK (kind IN ('bundle', 'loose')),
-  bundle_id INTEGER REFERENCES product(id),
+  product_id INTEGER REFERENCES product(id),
   status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'closed', 'withdrawn')),
   withdraw_reason TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
   closed_at TEXT,
-  note TEXT,
-  CHECK ((kind = 'bundle' AND bundle_id IS NOT NULL) OR (kind = 'loose' AND bundle_id IS NULL))
+  note TEXT
 );
 
 CREATE TABLE request_item (
@@ -159,8 +157,24 @@ CREATE INDEX idx_reminder_at ON reminder(remind_at);
 CREATE INDEX idx_price_lookup ON product_price(product_id, valid_from);
 CREATE INDEX idx_client_name ON client(name);
 
--- У клиента один активный запрос «Отдельные товары»
-CREATE UNIQUE INDEX uq_loose_request ON request(client_id) WHERE kind = 'loose' AND status = 'active';
+CREATE INDEX idx_request_product ON request(product_id);
+
+-- В состав комплекта входят только товары без состава: вложенных комплектов нет
+CREATE TRIGGER trg_bundle_item_leaf_insert
+BEFORE INSERT ON bundle_item
+WHEN EXISTS (SELECT 1 FROM bundle_item WHERE bundle_id = NEW.product_id)
+  OR EXISTS (SELECT 1 FROM bundle_item WHERE product_id = NEW.bundle_id)
+BEGIN
+  SELECT RAISE(ABORT, 'В состав комплекта входят только товары без состава');
+END;
+
+CREATE TRIGGER trg_bundle_item_leaf_update
+BEFORE UPDATE OF bundle_id, product_id ON bundle_item
+WHEN EXISTS (SELECT 1 FROM bundle_item WHERE bundle_id = NEW.product_id)
+  OR EXISTS (SELECT 1 FROM bundle_item WHERE product_id = NEW.bundle_id)
+BEGIN
+  SELECT RAISE(ABORT, 'В состав комплекта входят только товары без состава');
+END;
 
 -- «Изменить»: нужное количество не меньше уже купленного
 CREATE TRIGGER trg_qty_not_below_bought
@@ -204,4 +218,4 @@ END;
 
 INSERT INTO section (name, sort_order) VALUES
   ('Столовые предметы', 1), ('Чайно-кофейные предметы', 2), ('Сервизы', 3);
-INSERT INTO settings (key, value) VALUES ('schema_version', '4');
+INSERT INTO settings (key, value) VALUES ('schema_version', '5');
